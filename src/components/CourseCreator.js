@@ -502,6 +502,213 @@ function CourseCreator() {
     return TOKEN_LIMITS[apiProvider]?.[operation] || TOKEN_LIMITS.openai[operation];
   };
 
+  // File Chunking Configuration
+  const CHUNK_CONFIG = {
+    maxChunkSize: {
+      openai: 15000,    // Conservative for GPT-4
+      gemini: 25000     // Larger chunks for Gemini's bigger context
+    },
+    overlapSize: 500,   // Overlap between chunks to maintain context
+    minChunkSize: 1000, // Minimum viable chunk size
+    maxChunks: 20       // Maximum number of chunks to prevent excessive API calls
+  };
+
+  // Intelligent Text Chunking Function
+  const chunkLargeContent = (content, provider = 'gemini') => {
+    const maxSize = CHUNK_CONFIG.maxChunkSize[provider];
+    const overlap = CHUNK_CONFIG.overlapSize;
+    const minSize = CHUNK_CONFIG.minChunkSize;
+    
+    // If content is small enough, return as single chunk
+    if (content.length <= maxSize) {
+      return [{
+        id: 'chunk-1',
+        content: content,
+        startIndex: 0,
+        endIndex: content.length,
+        size: content.length,
+        isComplete: true
+      }];
+    }
+    
+    const chunks = [];
+    let startIndex = 0;
+    let chunkId = 1;
+    
+    while (startIndex < content.length && chunks.length < CHUNK_CONFIG.maxChunks) {
+      let endIndex = Math.min(startIndex + maxSize, content.length);
+      
+      // Try to break at natural boundaries (paragraphs, sentences)
+      if (endIndex < content.length) {
+        // Look for paragraph break
+        const paragraphBreak = content.lastIndexOf('\n\n', endIndex);
+        if (paragraphBreak > startIndex + minSize) {
+          endIndex = paragraphBreak + 2;
+        } else {
+          // Look for sentence break
+          const sentenceBreak = content.lastIndexOf('. ', endIndex);
+          if (sentenceBreak > startIndex + minSize) {
+            endIndex = sentenceBreak + 2;
+          }
+        }
+      }
+      
+      const chunkContent = content.substring(startIndex, endIndex);
+      
+      chunks.push({
+        id: `chunk-${chunkId}`,
+        content: chunkContent,
+        startIndex: startIndex,
+        endIndex: endIndex,
+        size: chunkContent.length,
+        isComplete: endIndex >= content.length,
+        chunkNumber: chunkId,
+        totalChunks: 0 // Will be updated after all chunks are created
+      });
+      
+      // Move start index with overlap
+      startIndex = Math.max(endIndex - overlap, startIndex + minSize);
+      chunkId++;
+    }
+    
+    // Update total chunks count
+    chunks.forEach(chunk => {
+      chunk.totalChunks = chunks.length;
+    });
+    
+    console.log(`Content chunked into ${chunks.length} pieces:`, 
+      chunks.map(c => ({ id: c.id, size: c.size })));
+    
+    return chunks;
+  };
+
+  // Process Chunks with AI
+  const processChunksWithAI = async (chunks, operation, apiKey, provider) => {
+    const results = [];
+    const totalChunks = chunks.length;
+    
+    console.log(`Processing ${totalChunks} chunks for ${operation}...`);
+    
+    for (let i = 0; i < chunks.length; i++) {
+      const chunk = chunks[i];
+      
+      try {
+        console.log(`Processing chunk ${i + 1}/${totalChunks} (${chunk.size} chars)...`);
+        
+        // Add chunk context to the prompt
+        const chunkPrompt = `
+CHUNK CONTEXT:
+- Chunk ${chunk.chunkNumber} of ${chunk.totalChunks}
+- Size: ${chunk.size} characters
+- Position: ${chunk.startIndex}-${chunk.endIndex}
+- Is Final Chunk: ${chunk.isComplete}
+
+CHUNK CONTENT:
+${chunk.content}
+
+${operation === 'analysis' ? 'Analyze this chunk and extract key information:' : 'Process this chunk:'}`;
+        
+        const result = await makeAIRequest(
+          [{ role: 'user', content: chunkPrompt }],
+          apiKey,
+          getTokenLimit(operation),
+          0.3,
+          provider
+        );
+        
+        results.push({
+          chunkId: chunk.id,
+          chunkNumber: chunk.chunkNumber,
+          result: result,
+          processed: true,
+          timestamp: new Date().toISOString()
+        });
+        
+        // Small delay between chunks to avoid rate limits
+        if (i < chunks.length - 1) {
+          await new Promise(resolve => setTimeout(resolve, 1000));
+        }
+        
+      } catch (error) {
+        console.error(`Error processing chunk ${chunk.id}:`, error);
+        
+        results.push({
+          chunkId: chunk.id,
+          chunkNumber: chunk.chunkNumber,
+          result: null,
+          processed: false,
+          error: error.message,
+          timestamp: new Date().toISOString()
+        });
+      }
+    }
+    
+    return results;
+  };
+
+  // Merge Chunk Results
+  const mergeChunkResults = (chunkResults, operation) => {
+    const successfulResults = chunkResults.filter(r => r.processed && r.result);
+    
+    if (successfulResults.length === 0) {
+      throw new Error('No chunks were successfully processed');
+    }
+    
+    console.log(`Merging ${successfulResults.length} successful chunk results...`);
+    
+    if (operation === 'analysis') {
+      // For analysis, combine all insights
+      const combinedAnalysis = {
+        sourceAnalysis: {
+          keyClaims: [],
+          keyTerms: [],
+          frameworks: [],
+          examples: [],
+          authorVoice: ''
+        },
+        courseBlueprint: {
+          learningOutcomes: [],
+          targetAudience: '',
+          prerequisites: []
+        },
+        // ... other analysis fields
+        chunkProcessingInfo: {
+          totalChunks: chunkResults.length,
+          successfulChunks: successfulResults.length,
+          failedChunks: chunkResults.length - successfulResults.length,
+          processingTimestamp: new Date().toISOString()
+        }
+      };
+      
+      // Merge results from all chunks
+      successfulResults.forEach(chunkResult => {
+        try {
+          const parsed = JSON.parse(chunkResult.result);
+          if (parsed.sourceAnalysis) {
+            combinedAnalysis.sourceAnalysis.keyClaims.push(...(parsed.sourceAnalysis.keyClaims || []));
+            combinedAnalysis.sourceAnalysis.keyTerms.push(...(parsed.sourceAnalysis.keyTerms || []));
+            combinedAnalysis.sourceAnalysis.frameworks.push(...(parsed.sourceAnalysis.frameworks || []));
+            combinedAnalysis.sourceAnalysis.examples.push(...(parsed.sourceAnalysis.examples || []));
+          }
+        } catch (e) {
+          console.warn(`Could not parse chunk result for merging:`, e);
+        }
+      });
+      
+      // Deduplicate arrays
+      Object.keys(combinedAnalysis.sourceAnalysis).forEach(key => {
+        if (Array.isArray(combinedAnalysis.sourceAnalysis[key])) {
+          combinedAnalysis.sourceAnalysis[key] = [...new Set(combinedAnalysis.sourceAnalysis[key])];
+        }
+      });
+      
+      return combinedAnalysis;
+    }
+    
+    // For other operations, concatenate results
+    return successfulResults.map(r => r.result).join('\n\n---\n\n');
+  };
+
   // Add usage tracking
   const trackApiUsage = (provider, operation, tokenCount, cost) => {
     const usage = {
@@ -697,6 +904,28 @@ OUTPUT REQUIREMENTS:
       const optimalProvider = selectOptimalProvider('analysis', sourceContent.length);
       const optimalApiKey = storedApiKeys[optimalProvider] || apiKey;
       
+      console.log(`Analyzing content: ${sourceContent.length} characters with ${optimalProvider}`);
+      
+      // Check if content needs chunking
+      const maxSingleRequestSize = CHUNK_CONFIG.maxChunkSize[optimalProvider];
+      
+      if (sourceContent.length > maxSingleRequestSize) {
+        console.log('Content is large, using chunking strategy...');
+        
+        // Chunk the content
+        const chunks = chunkLargeContent(sourceContent, optimalProvider);
+        
+        // Process each chunk
+        const chunkResults = await processChunksWithAI(chunks, 'analysis', optimalApiKey, optimalProvider);
+        
+        // Merge results
+        const mergedAnalysis = mergeChunkResults(chunkResults, 'analysis');
+        
+        console.log('Chunked analysis completed:', mergedAnalysis);
+        return mergedAnalysis;
+      }
+      
+      // Original single-request processing for smaller content
       const systemPrompt = createSystemPrompt(sourceContent, formData, questionAnswers);
       
       const analysisPrompt = `${systemPrompt}
@@ -775,96 +1004,96 @@ PRODUCE a comprehensive JSON analysis with:
       const analysisText = await makeAIRequest([{ role: 'user', content: analysisPrompt }], optimalApiKey, getTokenLimit('analysis'), 0.3, optimalProvider);
       return JSON.parse(analysisText);
     } catch (error) {
-    console.error('Error in comprehensive content analysis:', error);
-    
-    // Log the actual error details
-    if (error.message.startsWith('{')) {
+      console.error('Error in comprehensive content analysis:', error);
+      
+      // Log the actual error details
+      if (error.message.startsWith('{')) {
+        try {
+          const errorDetails = JSON.parse(error.message);
+          console.error('Structured error details:', errorDetails);
+          alert(`AI Error: ${errorDetails.message} (${errorDetails.errorType})`);
+        } catch (e) {
+          console.error('Error parsing error details:', e);
+        }
+      }
+      
+      // Parse error details if available
+      let errorDetails = {};
       try {
-        const errorDetails = JSON.parse(error.message);
-        console.error('Structured error details:', errorDetails);
-        alert(`AI Error: ${errorDetails.message} (${errorDetails.errorType})`);
+        errorDetails = JSON.parse(error.message);
       } catch (e) {
-        console.error('Error parsing error details:', e);
+        errorDetails = { errorType: 'UNKNOWN', message: error.message };
       }
+      
+      // Show user-friendly error message
+      const getUserFriendlyMessage = (errorDetails) => {
+        switch (errorDetails.errorType) {
+          case 'INVALID_API_KEY':
+            return 'AI service authentication failed. Please check your API key.';
+          case 'RATE_LIMIT':
+            return 'AI service rate limit exceeded. Please try again in a few minutes.';
+          case 'SERVER_ERROR':
+            return 'AI service is temporarily unavailable. Please try again later.';
+          case 'NETWORK_ERROR':
+            return 'Network connection issue. Please check your internet connection.';
+          default:
+            return 'AI processing temporarily unavailable.';
+        }
+      };
+      
+      const userMessage = getUserFriendlyMessage(errorDetails);
+      alert(`⚠️ Content Analysis Issue\n\n${userMessage}\n\nUsing fallback analysis based on your course information.`);
+      
+      return {
+        sourceAnalysis: {
+          keyClaims: ['Core principles identified', 'Practical applications noted'],
+          keyTerms: ['Key terminology extracted'],
+          frameworks: ['Methodological approaches identified'],
+          examples: ['Real-world examples noted'],
+          authorVoice: 'Professional and informative'
+        },
+        courseBlueprint: {
+          targetAudience: formData.targetAudience,
+          prerequisites: ['Basic understanding of the subject'],
+          learningOutcomes: ['Understand core concepts', 'Apply practical skills', 'Demonstrate competency'],
+          syllabus: ['Foundation concepts', 'Practical applications', 'Advanced techniques']
+        },
+        contentGaps: {
+          missingConcepts: ['Additional context needed'],
+          needsVerification: ['Source verification required'],
+          suggestedAdditions: ['Industry examples', 'Current trends']
+        },
+        scopeOptions: {
+          lite: { duration: '2-3 hours', modules: 2, focus: 'Essential concepts only' },
+          core: { duration: '4-6 hours', modules: questionAnswers.moduleCount, focus: 'Comprehensive coverage' },
+          deepDive: { duration: '8-12 hours', modules: questionAnswers.moduleCount + 2, focus: 'Advanced applications' }
+        },
+        assessmentStrategy: {
+          formativeAssessments: ['Knowledge checks', 'Quick exercises'],
+          summativeAssessments: ['Project work', 'Practical demonstrations'],
+          rubricAreas: ['Understanding', 'Application', 'Quality']
+        },
+        proposedAssets: {
+          worksheets: ['Practice exercises', 'Planning templates'],
+          templates: ['Project templates', 'Checklists'],
+          resources: ['Additional readings', 'Tool recommendations']
+        },
+        clarificationQuestions: [
+          'What specific outcomes are most important for your learners?',
+          'Are there industry-specific examples you\'d like included?',
+          'What tools or platforms should learners be familiar with?',
+          'How technical should the content be for your audience?',
+          'Are there any topics that should be emphasized or avoided?'
+        ],
+        aiProcessingStatus: {
+          failed: true,
+          errorType: errorDetails.errorType,
+          errorMessage: userMessage,
+          timestamp: errorDetails.timestamp,
+          canRetry: ['RATE_LIMIT', 'SERVER_ERROR', 'NETWORK_ERROR'].includes(errorDetails.errorType)
+        }
+      };
     }
-    
-    // Parse error details if available
-    let errorDetails = {};
-    try {
-      errorDetails = JSON.parse(error.message);
-    } catch (e) {
-      errorDetails = { errorType: 'UNKNOWN', message: error.message };
-    }
-    
-    // Show user-friendly error message
-    const getUserFriendlyMessage = (errorDetails) => {
-      switch (errorDetails.errorType) {
-        case 'INVALID_API_KEY':
-          return 'AI service authentication failed. Please check your API key.';
-        case 'RATE_LIMIT':
-          return 'AI service rate limit exceeded. Please try again in a few minutes.';
-        case 'SERVER_ERROR':
-          return 'AI service is temporarily unavailable. Please try again later.';
-        case 'NETWORK_ERROR':
-          return 'Network connection issue. Please check your internet connection.';
-        default:
-          return 'AI processing temporarily unavailable.';
-      }
-    };
-    
-    const userMessage = getUserFriendlyMessage(errorDetails);
-    alert(`⚠️ Content Analysis Issue\n\n${userMessage}\n\nUsing fallback analysis based on your course information.`);
-    
-    return {
-      sourceAnalysis: {
-        keyClaims: ['Core principles identified', 'Practical applications noted'],
-        keyTerms: ['Key terminology extracted'],
-        frameworks: ['Methodological approaches identified'],
-        examples: ['Real-world examples noted'],
-        authorVoice: 'Professional and informative'
-      },
-      courseBlueprint: {
-        targetAudience: formData.targetAudience,
-        prerequisites: ['Basic understanding of the subject'],
-        learningOutcomes: ['Understand core concepts', 'Apply practical skills', 'Demonstrate competency'],
-        syllabus: ['Foundation concepts', 'Practical applications', 'Advanced techniques']
-      },
-      contentGaps: {
-        missingConcepts: ['Additional context needed'],
-        needsVerification: ['Source verification required'],
-        suggestedAdditions: ['Industry examples', 'Current trends']
-      },
-      scopeOptions: {
-        lite: { duration: '2-3 hours', modules: 2, focus: 'Essential concepts only' },
-        core: { duration: '4-6 hours', modules: questionAnswers.moduleCount, focus: 'Comprehensive coverage' },
-        deepDive: { duration: '8-12 hours', modules: questionAnswers.moduleCount + 2, focus: 'Advanced applications' }
-      },
-      assessmentStrategy: {
-        formativeAssessments: ['Knowledge checks', 'Quick exercises'],
-        summativeAssessments: ['Project work', 'Practical demonstrations'],
-        rubricAreas: ['Understanding', 'Application', 'Quality']
-      },
-      proposedAssets: {
-        worksheets: ['Practice exercises', 'Planning templates'],
-        templates: ['Project templates', 'Checklists'],
-        resources: ['Additional readings', 'Tool recommendations']
-      },
-      clarificationQuestions: [
-        'What specific outcomes are most important for your learners?',
-        'Are there industry-specific examples you\'d like included?',
-        'What tools or platforms should learners be familiar with?',
-        'How technical should the content be for your audience?',
-        'Are there any topics that should be emphasized or avoided?'
-      ],
-      aiProcessingStatus: {
-        failed: true,
-        errorType: errorDetails.errorType,
-        errorMessage: userMessage,
-        timestamp: errorDetails.timestamp,
-        canRetry: ['RATE_LIMIT', 'SERVER_ERROR', 'NETWORK_ERROR'].includes(errorDetails.errorType)
-      }
-    };
-  }
   };
   
   const generateIntelligentModuleNames = async (sourceContent, structure, apiKey) => {
