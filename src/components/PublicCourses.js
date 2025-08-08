@@ -1,0 +1,332 @@
+import React, { useState, useEffect } from 'react';
+import { db } from '../firebase';
+import { collection, query, where, getDocs } from 'firebase/firestore';
+import { useAuth } from '../contexts/AuthContext';
+import { useEnrollment } from '../contexts/EnrollmentContext';
+import { useNavigate } from 'react-router-dom';
+
+function PublicCourses() {
+  const [courses, setCourses] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [searchTerm, setSearchTerm] = useState('');
+  const [selectedDifficulty, setSelectedDifficulty] = useState('');
+  const [selectedCategory, setSelectedCategory] = useState('');
+  const [enrollmentStatus, setEnrollmentStatus] = useState({});
+  
+  const { currentUser } = useAuth();
+  const { enrollInCourse, isEnrolled } = useEnrollment();
+  const navigate = useNavigate();
+
+  const fetchPublishedCourses = async () => {
+    try {
+      const q = query(
+        collection(db, 'courses'),
+        where('status', '==', 'published')
+      );
+      
+      const querySnapshot = await getDocs(q);
+      const coursesData = [];
+      
+      querySnapshot.forEach((doc) => {
+        const courseData = { id: doc.id, ...doc.data() };
+        coursesData.push(courseData);
+      });
+      
+      // Sort in JavaScript instead
+      coursesData.sort((a, b) => {
+        const aDate = a.createdAt?.toDate?.() || new Date(a.createdAt || 0);
+        const bDate = b.createdAt?.toDate?.() || new Date(b.createdAt || 0);
+        return bDate - aDate; // Descending order
+      });
+      
+      setCourses(coursesData);
+      
+      // Check enrollment status for each course
+      if (currentUser) {
+        const enrollmentChecks = {};
+        for (const course of coursesData) {
+          enrollmentChecks[course.id] = await isEnrolled(course.id);
+        }
+        setEnrollmentStatus(enrollmentChecks);
+      }
+    } catch (error) {
+      console.error('Error fetching published courses:', error);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    fetchPublishedCourses();
+  }, [currentUser]);
+
+  const handleEnroll = async (courseId, courseTitle) => {
+    if (!currentUser) {
+      alert('Please log in to enroll in courses.');
+      navigate('/login');
+      return;
+    }
+
+    const success = await enrollInCourse(courseId, courseTitle);
+    if (success) {
+      alert(`Successfully enrolled in "${courseTitle}"!`);
+      setEnrollmentStatus(prev => ({ ...prev, [courseId]: true }));
+    } else {
+      alert('Failed to enroll. Please try again.');
+    }
+  };
+
+  const handleViewCourse = (courseId) => {
+    navigate(`/course/${courseId}`);
+  };
+
+  const filteredCourses = courses.filter(course => {
+    const matchesSearch = course.title.toLowerCase().includes(searchTerm.toLowerCase()) ||
+                         course.description.toLowerCase().includes(searchTerm.toLowerCase());
+    const matchesDifficulty = !selectedDifficulty || course.difficulty === selectedDifficulty;
+    const matchesCategory = !selectedCategory || course.category === selectedCategory;
+    
+    return matchesSearch && matchesDifficulty && matchesCategory;
+  });
+
+  const getTotalLessons = (modules) => {
+    if (!modules || !Array.isArray(modules)) return 0;
+    return modules.reduce((total, module) => {
+      return total + (module.lessons ? module.lessons.length : 0);
+    }, 0);
+  };
+
+  const formatDate = (timestamp) => {
+    if (!timestamp) return 'Unknown';
+    const date = timestamp.toDate ? timestamp.toDate() : new Date(timestamp);
+    return date.toLocaleDateString();
+  };
+
+  if (loading) {
+    return (
+      <div style={{ padding: '20px', textAlign: 'center' }}>
+        <h2>Loading courses...</h2>
+      </div>
+    );
+  }
+
+  return (
+    <div style={{ padding: '20px', maxWidth: '1200px', margin: '0 auto' }}>
+      <h1>🌟 Public Courses</h1>
+      <p style={{ marginBottom: '30px', color: '#666' }}>
+        Discover and enroll in amazing courses created by our community
+      </p>
+
+      {/* Search and Filter Controls */}
+      <div style={{ 
+        display: 'flex', 
+        gap: '15px', 
+        marginBottom: '30px',
+        flexWrap: 'wrap',
+        alignItems: 'center'
+      }}>
+        <input
+          type="text"
+          placeholder="🔍 Search courses..."
+          value={searchTerm}
+          onChange={(e) => setSearchTerm(e.target.value)}
+          style={{
+            flex: '1',
+            minWidth: '250px',
+            padding: '10px 15px',
+            border: '1px solid #ddd',
+            borderRadius: '6px',
+            fontSize: '14px'
+          }}
+        />
+        
+        <select
+          value={selectedDifficulty}
+          onChange={(e) => setSelectedDifficulty(e.target.value)}
+          style={{
+            padding: '10px 15px',
+            border: '1px solid #ddd',
+            borderRadius: '6px',
+            fontSize: '14px',
+            backgroundColor: 'white'
+          }}
+        >
+          <option value="">All Difficulties</option>
+          <option value="beginner">Beginner</option>
+          <option value="intermediate">Intermediate</option>
+          <option value="advanced">Advanced</option>
+        </select>
+        
+        <select
+          value={selectedCategory}
+          onChange={(e) => setSelectedCategory(e.target.value)}
+          style={{
+            padding: '10px 15px',
+            border: '1px solid #ddd',
+            borderRadius: '6px',
+            fontSize: '14px',
+            backgroundColor: 'white'
+          }}
+        >
+          <option value="">All Categories</option>
+          <option value="programming">Programming</option>
+          <option value="design">Design</option>
+          <option value="business">Business</option>
+          <option value="marketing">Marketing</option>
+          <option value="other">Other</option>
+        </select>
+      </div>
+
+      {/* Results Summary */}
+      <p style={{ marginBottom: '20px', color: '#666' }}>
+        {filteredCourses.length} of {courses.length} published courses
+      </p>
+
+      {/* Course Grid */}
+      {filteredCourses.length === 0 ? (
+        <div style={{ 
+          textAlign: 'center', 
+          padding: '60px 20px',
+          backgroundColor: '#f8f9fa',
+          borderRadius: '8px'
+        }}>
+          <h2>No courses found</h2>
+          <p>Try adjusting your search criteria or check back later for new courses.</p>
+        </div>
+      ) : (
+        <div style={{ 
+          display: 'grid', 
+          gridTemplateColumns: 'repeat(auto-fill, minmax(350px, 1fr))', 
+          gap: '20px' 
+        }}>
+          {filteredCourses.map((course) => {
+            const isUserEnrolled = enrollmentStatus[course.id];
+            
+            return (
+              <div key={course.id} style={{
+                border: '1px solid #ddd',
+                borderRadius: '8px',
+                padding: '20px',
+                backgroundColor: 'white',
+                boxShadow: '0 2px 4px rgba(0,0,0,0.1)',
+                transition: 'transform 0.2s'
+              }}>
+                <h3 style={{ margin: '0 0 10px 0', color: '#333' }}>
+                  {course.title}
+                </h3>
+                
+                <p style={{ 
+                  color: '#666', 
+                  fontSize: '14px', 
+                  margin: '0 0 15px 0',
+                  display: '-webkit-box',
+                  WebkitLineClamp: 3,
+                  WebkitBoxOrient: 'vertical',
+                  overflow: 'hidden'
+                }}>
+                  {course.description}
+                </p>
+                
+                {/* Course Stats */}
+                <div style={{ 
+                  display: 'flex', 
+                  justifyContent: 'space-between',
+                  fontSize: '12px',
+                  color: '#666',
+                  marginBottom: '15px'
+                }}>
+                  <span>📚 {course.modules?.length || 0} modules</span>
+                  <span>📖 {getTotalLessons(course.modules)} lessons</span>
+                  <span>📈 {course.difficulty || 'beginner'}</span>
+                </div>
+                
+                {/* Course Info */}
+                <div style={{ 
+                  fontSize: '12px',
+                  color: '#666',
+                  marginBottom: '15px'
+                }}>
+                  <div>⏱️ Duration: {course.duration || 'Self-paced'}</div>
+                  <div>📅 Created: {formatDate(course.createdAt)}</div>
+                  {course.category && <div>🏷️ Category: {course.category}</div>}
+                </div>
+                
+                {/* Action Buttons */}
+                <div style={{ display: 'flex', gap: '10px' }}>
+                  <button
+                    onClick={() => handleViewCourse(course.id)}
+                    style={{
+                      flex: 1,
+                      backgroundColor: '#6c757d',
+                      color: 'white',
+                      border: 'none',
+                      padding: '10px',
+                      borderRadius: '6px',
+                      cursor: 'pointer',
+                      fontSize: '14px'
+                    }}
+                  >
+                    👁️ Preview
+                  </button>
+                  
+                  {isUserEnrolled ? (
+                    <button
+                      onClick={() => navigate('/enrolled-courses')}
+                      style={{
+                        flex: 1,
+                        backgroundColor: '#28a745',
+                        color: 'white',
+                        border: 'none',
+                        padding: '10px',
+                        borderRadius: '6px',
+                        cursor: 'pointer',
+                        fontSize: '14px',
+                        fontWeight: 'bold'
+                      }}
+                    >
+                      ✅ Enrolled
+                    </button>
+                  ) : (
+                    <button
+                      onClick={() => handleEnroll(course.id, course.title)}
+                      style={{
+                        flex: 1,
+                        backgroundColor: '#007bff',
+                        color: 'white',
+                        border: 'none',
+                        padding: '10px',
+                        borderRadius: '6px',
+                        cursor: 'pointer',
+                        fontSize: '14px',
+                        fontWeight: 'bold'
+                      }}
+                    >
+                      📚 Enroll
+                    </button>
+                  )}
+                </div>
+                
+                {isUserEnrolled && (
+                  <div style={{
+                    marginTop: '10px',
+                    padding: '8px',
+                    backgroundColor: '#d4edda',
+                    border: '1px solid #c3e6cb',
+                    borderRadius: '4px',
+                    textAlign: 'center',
+                    fontSize: '12px',
+                    color: '#155724'
+                  }}>
+                    🎓 You're enrolled in this course!
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+export default PublicCourses;
