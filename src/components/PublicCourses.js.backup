@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect } from 'react';
 import { db } from '../firebase';
 import { collection, query, where, getDocs } from 'firebase/firestore';
 import { useAuth } from '../contexts/AuthContext';
@@ -25,17 +25,16 @@ function PublicCourses() {
   const { enrollInCourse, isEnrolled } = useEnrollment();
   const navigate = useNavigate();
 
-  // Add useCallback to prevent infinite re-renders
-  const fetchPublishedCourses = useCallback(async () => {
+  const fetchPublishedCourses = async () => {
     try {
       const q = query(
-        collection(db, "courses"),
-        where("status", "==", "published"),
+        collection(db, 'courses'),
+        where('status', '==', 'published')
       );
-
+      
       const querySnapshot = await getDocs(q);
       const coursesData = [];
-
+      
       querySnapshot.forEach((doc) => {
         const courseData = { id: doc.id, ...doc.data() };
         coursesData.push(courseData);
@@ -63,23 +62,17 @@ function PublicCourses() {
     } finally {
       setLoading(false);
     }
-  }, [currentUser, isEnrolled]); // Dependencies for useCallback
+  };
 
   useEffect(() => {
     fetchPublishedCourses();
-  }, [fetchPublishedCourses]); // Now includes fetchPublishedCourses
+  }, [currentUser]);
 
   // Filter change handler for FilterPanel
-  const handleFilterChange = (fieldName, value) => {
-    console.log('Filter change:', fieldName, value); // Debug line
-    setFilters(prevFilters => ({
-      ...prevFilters,
-      [fieldName]: value
-    }));
+  const handleFilterChange = (newFilters) => {
+    setFilters(newFilters);
   };
 
-  // Remove the unused handleSearchChange function
-  
   // Clear all filters handler
   const handleClearFilters = () => {
     setFilters({
@@ -105,19 +98,14 @@ function PublicCourses() {
     // Difficulty filter
     const matchesDifficulty = !filters.difficulty || course.difficulty === filters.difficulty;
     
-    // Duration filter - only apply if course has duration field
-    const matchesDuration = !filters.duration || !course.duration || course.duration === filters.duration;
+    // Duration filter (you'll need to add duration field to your courses)
+    const matchesDuration = !filters.duration || course.duration === filters.duration;
     
-    // Free only filter - only apply if course has price/isFree fields
-    const matchesFree = !filters.freeOnly || 
-      (course.price !== undefined && course.price === 0) || 
-      (course.isFree !== undefined && course.isFree === true) ||
-      (course.price === undefined && course.isFree === undefined); // If no price info, show all
+    // Free only filter (you'll need to add price field to your courses)
+    const matchesFree = !filters.freeOnly || course.price === 0 || course.isFree;
     
-    // Rating filter - only apply if course has rating field
-    const matchesRating = filters.minRating === 0 || 
-      !course.rating || 
-      (course.rating && course.rating >= filters.minRating);
+    // Rating filter (you'll need to add rating field to your courses)
+    const matchesRating = filters.minRating === 0 || (course.rating && course.rating >= filters.minRating);
     
     return matchesSearch && matchesCategory && matchesDifficulty && matchesDuration && matchesFree && matchesRating;
   });
@@ -177,7 +165,7 @@ function PublicCourses() {
           <FilterPanel 
             filters={filters}
             onFilterChange={handleFilterChange}
-                      onClearFilters={handleClearFilters}
+            onClearFilters={handleClearFilters}
           />
         </div>
         
