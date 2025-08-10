@@ -4,12 +4,48 @@ import { db } from "../firebase";
 import { collection, addDoc, serverTimestamp } from "firebase/firestore";
 import pdfToText from 'react-pdftotext';
 
-// Remove the problematic PDF.js imports and worker configuration
-// import * as pdfjsLib from 'pdfjs-dist';
-// pdfjsLib.GlobalWorkerOptions.workerSrc = '';
+// Import new components
+import FileUploadStep from './FileUploadStep';
+import QuestionnaireStep from './QuestionnaireStep';
+import MultimediaStep from './MultimediaStep';
+import GenerationStep from './GenerationStep';
+import CoursePreview from './CoursePreview';
+import ApiKeyManager from './ApiKeyManager';
+import ErrorBoundary from './ErrorBoundary';
+import { useToast, showSuccessToast, showErrorToast, showWarningToast, showInfoToast } from './Toast';
+
+// Import custom hooks
+import useApiKey from '../hooks/useApiKey';
+import useFileUpload from '../hooks/useFileUpload';
+import useCourseGeneration from '../hooks/useCourseGeneration';
+import useValidation from '../hooks/useValidation';
+import useCourseAI from '../hooks/useCourseAI';
+import useCourseStepState from '../hooks/useCourseStepState';
+
+// Import validation utilities
+import {
+  validateApiKey,
+  validateTextContent,
+  validateQuestionAnswers,
+  validateMultimediaPrefs,
+  validateAndSanitizeFormData,
+  ValidationError
+} from '../utils/validation';
+
+// Import AI response parsing utilities
+import { parseAIResponse, mergeChunkResults, createAnalysisFallback } from '../utils/aiResponseParser';
 
 // Add OpenAI API key at the top
 const OPENAI_API_KEY = process.env.REACT_APP_OPENAI_API_KEY;
+
+// Chunk configuration for large content processing
+const CHUNK_CONFIG = {
+  maxChunkSize: {
+    openai: 8000,
+    gemini: 8000
+  },
+  overlapSize: 200
+};
 
 // Enhanced System Prompt for IP-preserving instructional design
 const createSystemPrompt = (sourceContent, formData, questionAnswers) => {
@@ -42,153 +78,89 @@ METHOD:
 
 function CourseCreator() {
   const { currentUser } = useAuth();
+  const { addToast } = useToast();
   
-  // Step management
-  const [step, setStep] = useState(1);
-  const [uploadedContent, setUploadedContent] = useState("");
-  const [uploadedFile, setUploadedFile] = useState(null);
-  const [isGenerating, setIsGenerating] = useState(false);
-  const [generatedCourse, setGeneratedCourse] = useState(null);
-  const [editingContent, setEditingContent] = useState({});
+  // Use custom hooks
+  const apiKeyHook = useApiKey(currentUser);
+  const fileUploadHook = useFileUpload();
+  const courseGenerationHook = useCourseGeneration();
+  const validationHook = useValidation(addToast);
+  const stepStateHook = useCourseStepState(addToast);
+  const courseAIHook = useCourseAI(apiKeyHook, courseGenerationHook, addToast);
   
-  // Add new state for manual text input
-  const [manualTextInput, setManualTextInput] = useState("");
-  const [inputMethod, setInputMethod] = useState("file"); // "file" or "text"
+  // Extract hook functions and state for easier access
+  const {
+    showApiKeyModal,
+    setShowApiKeyModal,
+    apiProvider,
+    setApiProvider,
+    apiKey,
+    setApiKey,
+    storedApiKeys,
+    saveApiKey,
+    getCurrentApiKey,
+    clearApiKeys,
+    debugApiKeys,
+    testApiConnection,
+    selectOptimalProvider,
+    getApiKeyForProvider
+  } = apiKeyHook;
   
-  // API Key Management - Initialize with stored values immediately
-  const [showApiKeyModal, setShowApiKeyModal] = useState(false);
-  const [apiProvider, setApiProvider] = useState('gemini'); // 'openai' or 'gemini' - temporarily default to Gemini
-  const [apiKey, setApiKey] = useState('');
-  const [storedApiKeys, setStoredApiKeys] = useState(() => ({
-    openai: localStorage.getItem('openai_api_key') || '',
-    gemini: localStorage.getItem('gemini_api_key') || ''
-  }));
+  const {
+    uploadedContent,
+    setUploadedContent,
+    uploadedFile,
+    setUploadedFile,
+    inputMethod,
+    setInputMethod,
+    manualTextInput,
+    setManualTextInput,
+    handleFileUpload,
+    handleInputMethodChange,
+    handleManualTextChange
+  } = fileUploadHook;
   
-  // Smart API provider selection
-  const selectOptimalProvider = (operation, contentLength) => {
-    // Use Gemini for large content (cheaper)
-    if (contentLength > 20000) {
-      return 'gemini';
-    }
-    
-    // Use OpenAI for smaller, quality-critical operations
-    if (operation === 'moduleNames' || operation === 'lessonCount') {
-      return 'openai';
-    }
-    
-    // Default to current user preference
-    return apiProvider;
-  };
+  const {
+    isGenerating,
+    setIsGenerating,
+    generatedCourse,
+    setGeneratedCourse,
+    editingContent,
+    setEditingContent,
+    handleContentEdit,
+    getTokenLimit,
+    chunkLargeContent,
+    processChunksWithAI,
+    trackApiUsage
+  } = courseGenerationHook;
   
-  // Update the content when switching input methods
-  const handleInputMethodChange = (method) => {
-    setInputMethod(method);
-    if (method === "text") {
-      setUploadedContent(manualTextInput);
-    } else {
-      setManualTextInput(uploadedContent);
-    }
-  };
+  const {
+    validateCurrentStep
+  } = validationHook;
   
-  const handleManualTextChange = (text) => {
-    setManualTextInput(text);
-    setUploadedContent(text);
-  };
+  const {
+    step,
+    formData,
+    questionAnswers,
+    multimediaPrefs,
+    setStep,
+    setFormData,
+    setQuestionAnswers,
+    setMultimediaPrefs,
+    handleInputChange,
+    handleQuestionChange,
+    handleCustomModuleNameChange,
+    handleNextStep,
+    handlePreviousStep,
+    goToStep
+  } = stepStateHook;
   
-  // Form data
-  const [formData, setFormData] = useState({
-    title: "",
-    description: "",
-    targetAudience: "",
-    learningObjectives: "",
-    duration: "",
-    difficulty: "beginner",
-    category: "",
-    additionalRequirements: "",
-  });
+  const {
+    makeAIRequest
+  } = courseAIHook;
   
-  // Question answers with new fields
-  const [questionAnswers, setQuestionAnswers] = useState({
-    courseLength: 'medium',
-    interactivityLevel: 'medium',
-    assessmentType: 'mixed',
-    learningStyle: 'mixed',
-    moduleCount: 3,
-    moduleNaming: 'ai-generated',
-    customModuleNames: []
-  });
-  
-  // Multimedia preferences
-  const [multimediaPrefs, setMultimediaPrefs] = useState({
-    includeAudio: false,
-    includeVideo: false,
-    voiceStyle: 'professional',
-    videoFormat: 'presentation'
-  });
-  
-  // Update stored API keys when user changes
-  useEffect(() => {
-    if (currentUser) {
-      const openaiKey = localStorage.getItem('openai_api_key') || '';
-      const geminiKey = localStorage.getItem('gemini_api_key') || '';
-      setStoredApiKeys({
-        openai: openaiKey,
-        gemini: geminiKey
-      });
-      
-      // Only show modal if no API keys are stored
-      const hasAnyApiKey = openaiKey || geminiKey;
-      if (!hasAnyApiKey) {
-        setShowApiKeyModal(true);
-      }
-    }
-  }, [currentUser]);
-  
-  // API Key Management Functions
-  const saveApiKey = () => {
-    if (!apiKey.trim()) {
-      alert('Please enter a valid API key');
-      return;
-    }
-    
-    localStorage.setItem(`${apiProvider}_api_key`, apiKey);
-    setStoredApiKeys(prev => ({ ...prev, [apiProvider]: apiKey }));
-    setApiKey('');
-    setShowApiKeyModal(false);
-    alert(`${apiProvider.toUpperCase()} API key saved successfully!`);
-  };
-  
-  const getCurrentApiKey = () => {
-    const key = storedApiKeys[apiProvider];
-    if (!key || key.trim() === '') {
-      console.error(`No API key found for provider: ${apiProvider}`);
-      return null;
-    }
-    return key;
-  };
-  
-  const clearApiKeys = () => {
-    localStorage.removeItem('openai_api_key');
-    localStorage.removeItem('gemini_api_key');
-    setStoredApiKeys({ openai: '', gemini: '' });
-    alert('All API keys cleared');
-  };
-  
-  // Event handlers
-  const handleInputChange = (field, value) => {
-    setFormData(prev => ({ ...prev, [field]: value }));
-  };
-  
-  const handleQuestionChange = (field, value) => {
-    setQuestionAnswers(prev => ({ ...prev, [field]: value }));
-  };
-  
-  const handleCustomModuleNameChange = (index, value) => {
-    const newNames = [...questionAnswers.customModuleNames];
-    newNames[index] = value;
-    setQuestionAnswers(prev => ({ ...prev, customModuleNames: newNames }));
-  };
-  
+  // Old API key management functions removed - now handled by useApiKey hook
+  // Event handlers now handled by useCourseStepState hook
   
   // Hybrid PDF extraction function
   const extractPDFText = async (file) => {
@@ -261,64 +233,40 @@ function CourseCreator() {
     };
   };
 
-  const handleFileUpload = async (event) => {
-    const file = event.target.files[0];
-    if (file) {
-      setUploadedFile(file);
-      
-      if (file.type === 'application/pdf') {
-        console.log('PDF file details:', {
-          name: file.name,
-          size: file.size,
-          type: file.type,
-          lastModified: new Date(file.lastModified)
-        });
-        
-        // Show loading state
-        const originalContent = uploadedContent;
-        setUploadedContent('Extracting PDF text... Please wait.');
-        
-        try {
-          const result = await extractPDFText(file);
-          
-          if (result.success) {
-            setUploadedContent(result.text);
-            alert(`✅ PDF extraction successful!\n\nMethod: ${result.method}\nCharacters: ${result.text.length}\nPages: ${result.pages}\n\nYou can now proceed to the next step.`);
-          } else {
-            setUploadedContent(originalContent); // Restore previous content
-            alert(`❌ PDF extraction failed\n\n${result.error}\n\nPlease try:\n• A different PDF file\n• Converting to text format\n• Using the manual text input option`);
-          }
-        } catch (error) {
-          setUploadedContent(originalContent); // Restore previous content
-          console.error('Unexpected error during PDF extraction:', error);
-          alert(`❌ Unexpected error during PDF extraction\n\nError: ${error.message}\n\nPlease try a different file or use manual text input.`);
-        }
-      } else {
-        // Handle text files as before
-        const reader = new FileReader();
-        reader.onload = (e) => {
-          setUploadedContent(e.target.result);
-          alert(`✅ Text file loaded successfully!\n\nCharacters: ${e.target.result.length}`);
-        };
-        reader.readAsText(file);
-      }
-    }
-  };
+  // Step validation functions now handled by useValidation hook
+  // Step navigation now handled by useCourseStepState hook
   
-  const handleContentEdit = (moduleIndex, lessonIndex, newContent) => {
-    const key = `${moduleIndex}-${lessonIndex}`;
-    setEditingContent(prev => ({ ...prev, [key]: newContent }));
-  };
+  // Old file upload and content edit functions removed - now handled by custom hooks
   
   const generateCourseWithMultimedia = async () => {
-    const currentApiKey = getCurrentApiKey();
-    console.log('API Provider:', apiProvider);
-    console.log('API Key exists:', !!currentApiKey);
-    console.log('API Key length:', currentApiKey?.length || 0);
-    
-    if (!currentApiKey) {
-      setShowApiKeyModal(true);
-      alert('Please configure your AI API key first');
+    try {
+      // Validate API key
+      const currentApiKey = getCurrentApiKey();
+      if (!currentApiKey) {
+        setShowApiKeyModal(true);
+        showErrorToast(addToast, 'Please configure your AI API key first');
+        return;
+      }
+      
+      // Validate API key format
+      validateApiKey(currentApiKey, apiProvider);
+      
+      // Validate all required data before generation
+      validateTextContent(uploadedContent);
+      validateQuestionAnswers(questionAnswers);
+      validateMultimediaPrefs(multimediaPrefs);
+      
+      console.log('API Provider:', apiProvider);
+      console.log('API Key exists:', !!currentApiKey);
+      console.log('API Key length:', currentApiKey?.length || 0);
+      
+      showInfoToast(addToast, 'Starting course generation...');
+    } catch (error) {
+      if (error instanceof ValidationError) {
+        showErrorToast(addToast, `Validation Error: ${error.message}`);
+      } else {
+        showErrorToast(addToast, 'Error preparing course generation');
+      }
       return;
     }
     
@@ -342,7 +290,7 @@ function CourseCreator() {
       console.log('Generating course with enhanced IP-preserving analysis...');
       
       // Step 1: Comprehensive analysis with IP preservation
-      const courseStructure = await analyzeContentStructure(sourceContent, currentApiKey);
+      const courseStructure = await analyzeContentStructure(sourceContent, getCurrentApiKey());
       console.log('Enhanced course structure analysis:', courseStructure);
       
       // Display clarification questions to user (could be implemented as a modal)
@@ -353,40 +301,77 @@ function CourseCreator() {
       if (questionAnswers.moduleNaming === 'custom' && questionAnswers.customModuleNames.length > 0) {
         moduleNames = questionAnswers.customModuleNames.slice(0, questionAnswers.moduleCount);
       } else {
-        moduleNames = await generateIntelligentModuleNames(sourceContent, courseStructure, currentApiKey);
+        moduleNames = await generateIntelligentModuleNames(sourceContent, courseStructure, getCurrentApiKey(), questionAnswers);
       }
       
-      // Step 3: Generate comprehensive modules with dual output
-      const modules = [];
-      for (let i = 0; i < questionAnswers.moduleCount; i++) {
+      // Step 3: Generate comprehensive modules with parallel processing for speed
+      console.log(`🚀 Generating ${questionAnswers.moduleCount} modules in parallel for faster processing...`);
+      
+      const modulePromises = Array.from({ length: questionAnswers.moduleCount }, async (_, i) => {
         const moduleName = moduleNames[i] || `Module ${i + 1}`;
         
-        const optimalLessonCount = await determineOptimalLessonCount(moduleName, sourceContent, courseStructure, currentApiKey);
+        console.log(`📚 Starting module ${i + 1}: ${moduleName}`);
+        
+        // Run module metadata generation in parallel
+        const [optimalLessonCount, moduleDescription] = await Promise.all([
+          determineOptimalLessonCount(moduleName, sourceContent, courseStructure, getCurrentApiKey()),
+          generateContextualModuleDescription(moduleName, sourceContent, getCurrentApiKey())
+        ]);
         
         const module = {
           id: `module-${i + 1}`,
           title: moduleName,
-          description: await generateContextualModuleDescription(moduleName, sourceContent, currentApiKey),
-          learningOutcomes: courseStructure.courseBlueprint.learningOutcomes.slice(i * 2, (i + 1) * 2),
+          description: moduleDescription,
+          learningOutcomes: (courseStructure?.courseBlueprint?.learningOutcomes || []).slice(i * 2, (i + 1) * 2),
           lessons: [],
-          assets: courseStructure.proposedAssets
+          assets: courseStructure?.proposedAssets || []
         };
         
-        // Generate comprehensive lessons with IP attribution
-        for (let j = 0; j < optimalLessonCount; j++) {
-          const lesson = await generateContextualLesson(
+        // Generate lessons in parallel (with concurrency limit of 3 to avoid rate limits)
+        console.log(`📝 Generating ${optimalLessonCount} lessons for module ${i + 1} in parallel...`);
+        const lessonPromises = Array.from({ length: optimalLessonCount }, (_, j) =>
+          generateContextualLesson(
             moduleName, 
             j + 1, 
             optimalLessonCount, 
             sourceContent, 
             questionAnswers, 
-            currentApiKey,
+            getCurrentApiKey(),
             courseStructure
-          );
-          module.lessons.push(lesson);
+          )
+        );
+        
+        // Process lessons in batches of 3 to avoid overwhelming the API
+        const batchSize = 3;
+        for (let batchStart = 0; batchStart < lessonPromises.length; batchStart += batchSize) {
+          const batch = lessonPromises.slice(batchStart, batchStart + batchSize);
+          const batchResults = await Promise.all(batch);
+          module.lessons.push(...batchResults);
+          
+          // Small delay between batches to be API-friendly
+          if (batchStart + batchSize < lessonPromises.length) {
+            await new Promise(resolve => setTimeout(resolve, 500));
+          }
         }
         
-        modules.push(module);
+        console.log(`✅ Module ${i + 1} completed with ${module.lessons.length} lessons`);
+        return module;
+      });
+      
+      // Process modules in batches of 2 to balance speed and API limits
+      const modules = [];
+      const moduleBatchSize = 2;
+      for (let batchStart = 0; batchStart < modulePromises.length; batchStart += moduleBatchSize) {
+        const batch = modulePromises.slice(batchStart, batchStart + moduleBatchSize);
+        const batchResults = await Promise.all(batch);
+        modules.push(...batchResults);
+        
+        console.log(`🎯 Completed ${modules.length}/${questionAnswers.moduleCount} modules`);
+        
+        // Small delay between module batches
+        if (batchStart + moduleBatchSize < modulePromises.length) {
+          await new Promise(resolve => setTimeout(resolve, 1000));
+        }
       }
       
       const course = {
@@ -400,7 +385,7 @@ function CourseCreator() {
           estimatedDuration: modules.reduce((acc, mod) => 
             acc + mod.lessons.reduce((lessonAcc, lesson) => lessonAcc + lesson.duration, 0), 0
           ),
-          difficulty: courseStructure.courseBlueprint.targetAudience,
+          difficulty: courseStructure?.courseBlueprint?.targetAudience || 'intermediate',
           hasMultimedia: multimediaPrefs.includeAudio || multimediaPrefs.includeVideo,
           generatedAt: new Date().toISOString(),
           sourceContentUsed: !!uploadedContent,
@@ -513,390 +498,14 @@ function CourseCreator() {
     lessonCount: 2000      // Conservative for future models (was 12000)
   };
 
-  // Dynamic provider detection with validation
-  const getTokenLimit = (operation, modelVersion = 'standard') => {
-    let limit;
-    if (modelVersion === 'gpt5' || apiProvider.includes('gpt-5')) {
-      limit = GPT5_TOKEN_LIMITS[operation];
-    } else {
-      limit = TOKEN_LIMITS[apiProvider]?.[operation] || TOKEN_LIMITS.openai[operation];
-    }
-    
-    // Validate against model limits
-    return validateTokenRequest(limit, operation);
-  };
+  // Old getTokenLimit function removed - now handled by useCourseGeneration hook
 
-  // File Chunking Configuration - Conservative sizes
-  const CHUNK_CONFIG = {
-    maxChunkSize: {
-      openai: 8000,     // Reduced from 15000 for better token management
-      gemini: 12000     // Reduced from 25000 for better token management
-    },
-    overlapSize: 500,   // Overlap between chunks to maintain context
-    minChunkSize: 1000, // Minimum viable chunk size
-    maxChunks: 20       // Maximum number of chunks to prevent excessive API calls
-  };
+  // Old chunking configuration and function removed - now handled by useCourseGeneration hook
 
-  // Intelligent Text Chunking Function
-  const chunkLargeContent = (content, provider = 'gemini') => {
-    const maxSize = CHUNK_CONFIG.maxChunkSize[provider];
-    const overlap = CHUNK_CONFIG.overlapSize;
-    const minSize = CHUNK_CONFIG.minChunkSize;
-    
-    // If content is small enough, return as single chunk
-    if (content.length <= maxSize) {
-      return [{
-        id: 'chunk-1',
-        content: content,
-        startIndex: 0,
-        endIndex: content.length,
-        size: content.length,
-        isComplete: true
-      }];
-    }
-    
-    const chunks = [];
-    let startIndex = 0;
-    let chunkId = 1;
-    
-    while (startIndex < content.length && chunks.length < CHUNK_CONFIG.maxChunks) {
-      let endIndex = Math.min(startIndex + maxSize, content.length);
-      
-      // Try to break at natural boundaries (paragraphs, sentences)
-      if (endIndex < content.length) {
-        // Look for paragraph break
-        const paragraphBreak = content.lastIndexOf('\n\n', endIndex);
-        if (paragraphBreak > startIndex + minSize) {
-          endIndex = paragraphBreak + 2;
-        } else {
-          // Look for sentence break
-          const sentenceBreak = content.lastIndexOf('. ', endIndex);
-          if (sentenceBreak > startIndex + minSize) {
-            endIndex = sentenceBreak + 2;
-          }
-        }
-      }
-      
-      const chunkContent = content.substring(startIndex, endIndex);
-      
-      chunks.push({
-        id: `chunk-${chunkId}`,
-        content: chunkContent,
-        startIndex: startIndex,
-        endIndex: endIndex,
-        size: chunkContent.length,
-        isComplete: endIndex >= content.length,
-        chunkNumber: chunkId,
-        totalChunks: 0 // Will be updated after all chunks are created
-      });
-      
-      // Move start index with overlap
-      startIndex = Math.max(endIndex - overlap, startIndex + minSize);
-      chunkId++;
-    }
-    
-    // Update total chunks count
-    chunks.forEach(chunk => {
-      chunk.totalChunks = chunks.length;
-    });
-    
-    console.log(`Content chunked into ${chunks.length} pieces:`, 
-      chunks.map(c => ({ id: c.id, size: c.size })));
-    
-    return chunks;
-  };
+  // Process Chunks with AI and Merge Chunk Results now handled by useCourseAI hook
 
-  // Process Chunks with AI
-  const processChunksWithAI = async (chunks, operation, apiKey, provider) => {
-    const results = [];
-    const totalChunks = chunks.length;
-    
-    console.log(`Processing ${totalChunks} chunks for ${operation}...`);
-    
-    for (let i = 0; i < chunks.length; i++) {
-      const chunk = chunks[i];
-      
-      try {
-        console.log(`Processing chunk ${i + 1}/${totalChunks} (${chunk.size} chars)...`);
-        
-        // Add chunk context to the prompt
-        const chunkPrompt = `
-CHUNK CONTEXT:
-- Chunk ${chunk.chunkNumber} of ${chunk.totalChunks}
-- Size: ${chunk.size} characters
-- Position: ${chunk.startIndex}-${chunk.endIndex}
-- Is Final Chunk: ${chunk.isComplete}
-
-CHUNK CONTENT:
-${chunk.content}
-
-${operation === 'analysis' ? 'Analyze this chunk and extract key information:' : 'Process this chunk:'}`;
-        
-        const result = await makeAIRequest(
-          [{ role: 'user', content: chunkPrompt }],
-          apiKey,
-          getTokenLimit(operation),
-          0.3,
-          provider
-        );
-        
-        results.push({
-          chunkId: chunk.id,
-          chunkNumber: chunk.chunkNumber,
-          result: result,
-          processed: true,
-          timestamp: new Date().toISOString()
-        });
-        
-        // Small delay between chunks to avoid rate limits
-        if (i < chunks.length - 1) {
-          await new Promise(resolve => setTimeout(resolve, 1000));
-        }
-        
-      } catch (error) {
-        console.error(`Error processing chunk ${chunk.id}:`, error);
-        
-        results.push({
-          chunkId: chunk.id,
-          chunkNumber: chunk.chunkNumber,
-          result: null,
-          processed: false,
-          error: error.message,
-          timestamp: new Date().toISOString()
-        });
-      }
-    }
-    
-    return results;
-  };
-
-  // Merge Chunk Results
-  const mergeChunkResults = (chunkResults, operation) => {
-    const successfulResults = chunkResults.filter(r => r.processed && r.result);
-    
-    if (successfulResults.length === 0) {
-      throw new Error('No chunks were successfully processed');
-    }
-    
-    console.log(`Merging ${successfulResults.length} successful chunk results...`);
-    
-    if (operation === 'analysis') {
-      // For analysis, combine all insights
-      const combinedAnalysis = {
-        sourceAnalysis: {
-          keyClaims: [],
-          keyTerms: [],
-          frameworks: [],
-          examples: [],
-          authorVoice: ''
-        },
-        courseBlueprint: {
-          learningOutcomes: [],
-          targetAudience: '',
-          prerequisites: []
-        },
-        // ... other analysis fields
-        chunkProcessingInfo: {
-          totalChunks: chunkResults.length,
-          successfulChunks: successfulResults.length,
-          failedChunks: chunkResults.length - successfulResults.length,
-          processingTimestamp: new Date().toISOString()
-        }
-      };
-      
-      // Merge results from all chunks
-        successfulResults.forEach(chunkResult => {
-          try {
-            const parsed = parseAIResponse(chunkResult.result); // Changed from JSON.parse
-            if (parsed.sourceAnalysis) {
-              combinedAnalysis.sourceAnalysis.keyClaims.push(...(parsed.sourceAnalysis.keyClaims || []));
-              combinedAnalysis.sourceAnalysis.keyTerms.push(...(parsed.sourceAnalysis.keyTerms || []));
-              combinedAnalysis.sourceAnalysis.frameworks.push(...(parsed.sourceAnalysis.frameworks || []));
-              combinedAnalysis.sourceAnalysis.examples.push(...(parsed.sourceAnalysis.examples || []));
-            }
-          } catch (e) {
-            console.warn(`Could not parse chunk result for merging:`, e);
-          }
-        });
-      
-      // Deduplicate arrays
-      Object.keys(combinedAnalysis.sourceAnalysis).forEach(key => {
-        if (Array.isArray(combinedAnalysis.sourceAnalysis[key])) {
-          combinedAnalysis.sourceAnalysis[key] = [...new Set(combinedAnalysis.sourceAnalysis[key])];
-        }
-      });
-      
-      return combinedAnalysis;
-    }
-    
-    // For other operations, concatenate results
-    return successfulResults.map(r => r.result).join('\n\n---\n\n');
-  };
-
-  // Add usage tracking
-  const trackApiUsage = (provider, operation, tokenCount, cost) => {
-    const usage = {
-      timestamp: new Date().toISOString(),
-      provider,
-      operation,
-      tokenCount,
-      estimatedCost: cost,
-      userId: currentUser?.uid
-    };
-    
-    // Log to console for now, later save to Firebase
-    console.log('API Usage:', usage);
-    
-    // Optional: Save to localStorage for tracking
-    const existingUsage = JSON.parse(localStorage.getItem('apiUsage') || '[]');
-    existingUsage.push(usage);
-    localStorage.setItem('apiUsage', JSON.stringify(existingUsage.slice(-100))); // Keep last 100 entries
-  };
-
-  // Enhanced AI Helper Functions with better error capture
-  const makeAIRequest = async (messages, apiKey, maxTokens = 300, temperature = 0.7, providerOverride = null) => {
-    const currentProvider = providerOverride || apiProvider;
-    try {
-      if (currentProvider === 'openai') {
-        const validatedMaxTokens = validateTokenRequest(maxTokens, 'openai-request');
-        
-        const response = await fetch('https://api.openai.com/v1/chat/completions', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${apiKey}`
-          },
-          body: JSON.stringify({
-            model: 'gpt-4o',
-            messages: messages,
-            max_tokens: validatedMaxTokens,
-            temperature: temperature
-          })
-        });
-        
-        if (!response.ok) {
-          const errorData = await response.json().catch(() => ({}));
-          const errorCode = errorData.error?.code;
-          const errorMessage = errorData.error?.message || response.statusText;
-          
-          let errorType = 'UNKNOWN';
-          let enhancedMessage = errorMessage;
-          
-          // Enhanced quota/billing error handling
-          if (response.status === 429) {
-            if (errorMessage.includes('quota') || errorMessage.includes('billing') || errorCode === 'insufficient_quota') {
-              errorType = 'QUOTA_EXCEEDED';
-              enhancedMessage = `${errorMessage}\n\nSolutions:\n1. Add credits to your OpenAI account\n2. Increase your spending limit\n3. Switch to Gemini API temporarily`;
-            } else {
-              errorType = 'RATE_LIMIT';
-            }
-          } else if (response.status === 401) {
-            errorType = 'INVALID_API_KEY';
-          } else if (response.status === 500) {
-            errorType = 'SERVER_ERROR';
-          }
-          
-          const errorDetails = {
-            status: response.status,
-            statusText: response.statusText,
-            provider: 'OpenAI',
-            errorType: errorType,
-            message: enhancedMessage,
-            timestamp: new Date().toISOString()
-          };
-          throw new Error(JSON.stringify(errorDetails));
-        }
-        
-        const data = await response.json();
-        return data.choices[0].message.content.trim();
-      } else if (currentProvider === 'gemini') {
-        // Convert OpenAI message format to Gemini format
-        const geminiText = messages.map(msg => {
-          if (msg.role === 'system') {
-            return `System: ${msg.content}`;
-          } else if (msg.role === 'user') {
-            return `User: ${msg.content}`;
-          }
-          return msg.content;
-        }).join('\n\n');
-        
-        const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-pro:generateContent?key=${apiKey}`, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({
-            contents: [{
-              parts: [{ text: geminiText }]
-            }],
-            generationConfig: {
-              temperature: temperature,
-              maxOutputTokens: maxTokens,
-            }
-          })
-        });
-        
-        if (!response.ok) {
-          const errorData = await response.json().catch(() => ({}));
-          let errorType = 'UNKNOWN';
-          let enhancedMessage = errorData.error?.message || `Gemini API error: ${response.status}`;
-          
-          // Enhanced Gemini-specific error handling
-          if (response.status === 400) {
-            if (enhancedMessage.includes('model not found')) {
-              errorType = 'MODEL_NOT_FOUND';
-              enhancedMessage = 'Gemini model not available. Try gemini-1.5-pro instead.';
-            } else if (enhancedMessage.includes('safety')) {
-              errorType = 'CONTENT_FILTERED';
-              enhancedMessage = 'Content blocked by safety filters. Try rephrasing your content.';
-            } else {
-              errorType = 'INVALID_REQUEST';
-            }
-          } else if (response.status === 401) {
-            errorType = 'INVALID_API_KEY';
-          } else if (response.status === 429) {
-            errorType = 'RATE_LIMIT';
-          } else if (response.status === 500) {
-            errorType = 'SERVER_ERROR';
-          }
-          
-          const errorDetails = {
-            status: response.status,
-            statusText: response.statusText,
-            provider: 'Gemini',
-            errorType: errorType,
-            message: enhancedMessage,
-            timestamp: new Date().toISOString()
-          };
-          throw new Error(JSON.stringify(errorDetails));
-        }
-        
-        const data = await response.json();
-        return data.candidates[0].content.parts[0].text.trim();
-      }
-      
-      throw new Error(JSON.stringify({
-        errorType: 'UNSUPPORTED_PROVIDER',
-        message: 'Unsupported AI provider',
-        provider: currentProvider,
-        timestamp: new Date().toISOString()
-      }));
-    } catch (error) {
-      // If it's already a structured error, re-throw it
-      if (error.message.startsWith('{')) {
-        throw error;
-      }
-      
-      // Handle network and other errors
-      const errorDetails = {
-        errorType: 'NETWORK_ERROR',
-        message: error.message || 'Network or connection error',
-        provider: currentProvider,
-        timestamp: new Date().toISOString()
-      };
-      throw new Error(JSON.stringify(errorDetails));
-    }
-  };
+  // Old trackApiUsage function removed - now handled by useCourseGeneration hook
+  // Enhanced AI Helper Functions now handled by useCourseAI hook
   
   const createSystemPrompt = (sourceContent, formData, questionAnswers) => {
     return `You are an expert instructional designer and course architect. Your task is to analyze source material and create comprehensive, engaging educational content.
@@ -924,345 +533,20 @@ OUTPUT REQUIREMENTS:
 - Incorporate the specified learning preferences`;
   };
 
-  // Enhanced parseAIResponse function with control character sanitization and progressive repair
-  const parseAIResponse = (response) => {
-    if (!response || typeof response !== 'string') {
-      console.warn('Invalid response: expected non-empty string, using fallback');
-      return createAnalysisFallback(new Error('Invalid response'), response);
-    }
+  // Enhanced parseAIResponse function now handled by aiResponseParser utility
 
-    // Step 1: Basic content extraction and cleanup
-    let content = response.trim();
-    
-    // Remove common markdown artifacts
-    content = content.replace(/```json\s*/g, '').replace(/```\s*/g, '');
-    
-    // Find JSON boundaries more precisely
-    const startIndex = content.indexOf('{');
-    if (startIndex === -1) {
-      console.warn('No JSON object found in response, using fallback');
-      return createAnalysisFallback(new Error('No JSON object found'), response);
-    }
-    
-    // Extract potential JSON content
-    content = content.substring(startIndex);
-    
-    // Step 2: Try direct parsing first
-    try {
-      return JSON.parse(content);
-    } catch (initialError) {
-      console.warn('Initial JSON parse failed, attempting repairs...', initialError.message);
-    }
-    
-    // Step 3: Try sanitization
-    try {
-      const sanitized = sanitizeJSONString(content);
-      return JSON.parse(sanitized);
-    } catch (sanitizeError) {
-      console.warn('Sanitized parse failed, trying basic repair...', sanitizeError.message);
-    }
-    
-    // Step 4: Try basic repair
-    try {
-      const basicRepaired = tryBasicRepair(content);
-      if (basicRepaired) {
-        return JSON.parse(basicRepaired);
-      }
-    } catch (basicError) {
-      console.warn('Basic repair failed, trying aggressive repair...', basicError.message);
-    }
-    
-    // Step 5: Try aggressive repair
-    try {
-      const aggressiveRepaired = tryAggressiveRepair(content);
-      if (aggressiveRepaired) {
-        return JSON.parse(aggressiveRepaired);
-      }
-    } catch (aggressiveError) {
-      console.warn('Aggressive repair failed, trying field extraction...', aggressiveError.message);
-    }
-    
-    // Step 6: Try field-by-field extraction
-    try {
-      const extracted = tryFieldByFieldExtraction(content);
-      if (extracted) {
-        return JSON.parse(extracted);
-      }
-    } catch (extractError) {
-      console.warn('Field extraction failed, using fallback...', extractError.message);
-    }
-    
-    // Step 7: Return structured fallback
-    console.error('All parsing attempts failed, returning fallback structure');
-    return createAnalysisFallback(new Error('JSON parsing failed after all repair attempts'), response);
-  };
+  // JSON sanitization functions now handled by aiResponseParser utility
 
-  // Enhanced helper function to sanitize JSON strings and fix control character issues
-  const sanitizeJSONString = (jsonString) => {
-    return jsonString
-      // Fix double-escaped quotes (\\" -> \")
-      .replace(/\\\\"/g, '\\"')
-      // Fix over-escaped quotes (\\\\" -> \")
-      .replace(/\\\\\\"/g, '\\"')
-      // Fix unescaped quotes within strings more carefully
-      .replace(/"([^"]*?)"([^,:}\]\s])([^"]*?)"/g, '"$1\\"$2$3"')
-      // Fix unescaped newlines in strings
-      .replace(/"([^"]*?)\n([^"]*?)"/g, '"$1\\n$2"')
-      // Fix unescaped tabs in strings
-      .replace(/"([^"]*?)\t([^"]*?)"/g, '"$1\\t$2"')
-      // Fix unescaped carriage returns
-      .replace(/"([^"]*?)\r([^"]*?)"/g, '"$1\\r$2"')
-      // Fix unescaped backslashes (but not already escaped ones)
-      .replace(/"([^"]*?)\\(?!["\\nrtbf\/u])([^"]*?)"/g, '"$1\\\\$2"')
-      // Remove problematic control characters (except common ones)
-      .replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, '')
-      // Normalize whitespace
-      .replace(/\s+/g, ' ')
-      // Remove trailing commas
-      .replace(/,\s*}/g, '}')
-      .replace(/,\s*]/g, ']')
-      // Fix common JSON syntax errors
-      .replace(/([^\\])\\([^"\\nrtbf\/u])/g, '$1\\\\$2')
-      // Remove any content after the last closing brace
-      .replace(/(}[^}]*)$/, '}');
-  };
-
-  // Basic repair attempt
-  const tryBasicRepair = (content) => {
-    // Extract JSON more carefully
-    let jsonContent = content;
-    
-    // Remove markdown
-    jsonContent = jsonContent.replace(/```json\s*/g, '').replace(/```\s*/g, '');
-    
-    // Find JSON boundaries more precisely
-    const startIndex = jsonContent.indexOf('{');
-    if (startIndex === -1) return null;
-    
-    let braceCount = 0;
-    let endIndex = -1;
-    
-    for (let i = startIndex; i < jsonContent.length; i++) {
-      if (jsonContent[i] === '{') braceCount++;
-      if (jsonContent[i] === '}') {
-        braceCount--;
-        if (braceCount === 0) {
-          endIndex = i;
-          break;
-        }
-      }
-    }
-    
-    if (endIndex === -1) return null;
-    
-    const extracted = jsonContent.substring(startIndex, endIndex + 1);
-    return sanitizeJSONString(extracted);
-  };
-
-  // Enhanced aggressive repair attempt
-  const tryAggressiveRepair = (content) => {
-    try {
-      // More aggressive cleaning
-      let cleaned = content
-        .replace(/```json/g, '')
-        .replace(/```/g, '')
-        .trim();
-      
-      // Find the main JSON object
-      const startBrace = cleaned.indexOf('{');
-      if (startBrace === -1) return null;
-      
-      // Extract only the JSON part, ignoring everything after the last }
-      let braceCount = 0;
-      let endBrace = -1;
-      let inString = false;
-      let escaped = false;
-      
-      for (let i = startBrace; i < cleaned.length; i++) {
-        const char = cleaned[i];
-        
-        if (escaped) {
-          escaped = false;
-          continue;
-        }
-        
-        if (char === '\\') {
-          escaped = true;
-          continue;
-        }
-        
-        if (char === '"') {
-          inString = !inString;
-          continue;
-        }
-        
-        if (!inString) {
-          if (char === '{') braceCount++;
-          if (char === '}') {
-            braceCount--;
-            if (braceCount === 0) {
-              endBrace = i;
-              break;
-            }
-          }
-        }
-      }
-      
-      if (endBrace === -1) return null;
-      
-      cleaned = cleaned.substring(startBrace, endBrace + 1);
-      
-      // Attempt to fix malformed strings by removing problematic characters
-      cleaned = cleaned
-        .replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, '') // Remove control chars except \n, \t, \r
-        .replace(/\\\\n/g, ' ') // Replace literal \\n with spaces
-        .replace(/\\\\t/g, ' ') // Replace literal \\t with spaces
-        .replace(/\\n/g, ' ') // Replace literal \n with spaces
-        .replace(/\\t/g, ' ') // Replace literal \t with spaces
-        .replace(/\n/g, ' ') // Replace actual newlines with spaces
-        .replace(/\t/g, ' ') // Replace actual tabs with spaces
-        .replace(/\r/g, ' ') // Replace carriage returns with spaces
-        .replace(/\s+/g, ' ') // Normalize whitespace
-        .replace(/,\s*}/g, '}') // Remove trailing commas
-        .replace(/,\s*]/g, ']') // Remove trailing commas in arrays
-        // Fix double-escaped quotes
-        .replace(/\\\\"/g, '\\"')
-        // Fix over-escaped quotes
-        .replace(/\\\\\\"/g, '\\"');
-      
-      return cleaned;
-    } catch (error) {
-      return null;
-    }
-  };
-
-  // Field-by-field extraction as last resort
-  const tryFieldByFieldExtraction = (content) => {
-    try {
-      // Extract recognizable JSON fields manually
-      const fields = {};
-      
-      // Extract arrays like keyClaims, keyTerms, etc.
-      const arrayMatches = content.match(/"(\w+)":\s*\[(.*?)\]/g);
-      if (arrayMatches) {
-        arrayMatches.forEach(match => {
-          const fieldMatch = match.match(/"(\w+)":\s*\[(.*?)\]/);
-          if (fieldMatch) {
-            const fieldName = fieldMatch[1];
-            const arrayContent = fieldMatch[2];
-            try {
-              // Simple array parsing
-              const items = arrayContent.split(',').map(item =>
-                item.trim().replace(/^"/, '').replace(/"$/, '')
-              ).filter(item => item.length > 0);
-              fields[fieldName] = items;
-            } catch (e) {
-              fields[fieldName] = [];
-            }
-          }
-        });
-      }
-      
-      // Extract simple string fields
-      const stringMatches = content.match(/"(\w+)":\s*"([^"]+)"/g);
-      if (stringMatches) {
-        stringMatches.forEach(match => {
-          const fieldMatch = match.match(/"(\w+)":\s*"([^"]+)"/);
-          if (fieldMatch) {
-            fields[fieldMatch[1]] = fieldMatch[2];
-          }
-        });
-      }
-      
-      // Build a basic structure
-      if (Object.keys(fields).length > 0) {
-        return JSON.stringify({
-          sourceAnalysis: {
-            keyClaims: fields.keyClaims || [],
-            keyTerms: fields.keyTerms || [],
-            frameworks: fields.frameworks || [],
-            examples: fields.examples || [],
-            authorVoice: fields.authorVoice || 'Professional'
-          },
-          courseBlueprint: {
-            targetAudience: fields.targetAudience || 'General learners',
-            prerequisites: fields.prerequisites || [],
-            learningOutcomes: fields.learningOutcomes || [],
-            syllabus: fields.syllabus || []
-          },
-          contentGaps: {
-            missingConcepts: fields.missingConcepts || [],
-            needsVerification: fields.needsVerification || [],
-            suggestedAdditions: fields.suggestedAdditions || []
-          },
-          scopeOptions: {
-            lite: { duration: '2-3 hours', modules: 2, focus: 'Core concepts' },
-            core: { duration: '4-6 hours', modules: 3, focus: 'Comprehensive' }
-          }
-        });
-      }
-      
-      return null;
-    } catch (error) {
-      return null;
-    }
-  };
-
-  // Create fallback analysis structure
-  const createAnalysisFallback = (error, rawResponse) => {
-    return {
-      sourceAnalysis: {
-        keyClaims: ['Content analysis performed with parsing limitations'],
-        keyTerms: ['Technical terminology identified'],
-        frameworks: ['Methodological approaches detected'],
-        examples: ['Practical examples noted'],
-        authorVoice: 'Professional and informative'
-      },
-      courseBlueprint: {
-        targetAudience: 'General learners',
-        prerequisites: ['Basic understanding of the subject matter'],
-        learningOutcomes: [
-          'Understand core concepts from the source material',
-          'Apply key principles in practical scenarios',
-          'Demonstrate competency in the subject area'
-        ],
-        syllabus: [
-          'Foundation concepts and terminology',
-          'Practical applications and examples',
-          'Advanced techniques and best practices'
-        ]
-      },
-      contentGaps: {
-        missingConcepts: ['Additional context may be needed'],
-        needsVerification: ['Source verification recommended'],
-        suggestedAdditions: ['Industry examples', 'Current best practices']
-      },
-      scopeOptions: {
-        lite: {
-          duration: '2-3 hours',
-          modules: 2,
-          focus: 'Essential concepts only'
-        },
-        core: {
-          duration: '4-6 hours',
-          modules: 3,
-          focus: 'Comprehensive coverage with examples'
-        }
-      },
-      error: error.message,
-      rawResponse: typeof rawResponse === 'string' ? rawResponse.substring(0, 1000) : rawResponse,
-      fallback: true,
-      timestamp: new Date().toISOString()
-    };
-  };
+  // All parsing helper functions now handled by aiResponseParser utility
 
   const analyzeContentStructure = async (sourceContent, apiKey) => {
     try {
       // Use smart provider selection for analysis
       const optimalProvider = selectOptimalProvider('analysis', sourceContent.length);
-      const optimalApiKey = storedApiKeys[optimalProvider] || apiKey;
+      const optimalApiKey = getApiKeyForProvider(optimalProvider);
       
-      console.log(`Analyzing content: ${sourceContent.length} characters with ${optimalProvider}`);
+      console.log(`🔍 Analyzing content: ${sourceContent.length} characters with ${optimalProvider}`);
+      console.log(`🔑 API Key status for ${optimalProvider}: ${optimalApiKey ? 'Available' : 'Missing'}`);
       
       // Check if content needs chunking
       const maxSingleRequestSize = CHUNK_CONFIG.maxChunkSize[optimalProvider];
@@ -1274,7 +558,7 @@ OUTPUT REQUIREMENTS:
         const chunks = chunkLargeContent(sourceContent, optimalProvider);
         
         // Process each chunk
-        const chunkResults = await processChunksWithAI(chunks, 'analysis', optimalApiKey, optimalProvider);
+        const chunkResults = await processChunksWithAI(chunks, 'analysis', optimalApiKey, optimalProvider, makeAIRequest);
         
         // Merge results
         const mergedAnalysis = mergeChunkResults(chunkResults, 'analysis');
@@ -1406,17 +690,31 @@ PRODUCE a comprehensive JSON analysis with:
     }
   };
   
-  const generateIntelligentModuleNames = async (sourceContent, structure, apiKey) => {
+  const generateIntelligentModuleNames = async (sourceContent, structure, apiKey, questionAnswers) => {
     try {
       // Use smart provider selection for module names
       const optimalProvider = selectOptimalProvider('moduleNames', sourceContent.length);
-      const optimalApiKey = storedApiKeys[optimalProvider] || apiKey;
+      const optimalApiKey = getApiKeyForProvider(optimalProvider);
       
-      const prompt = `Based on this course content, create ${questionAnswers.moduleCount} progressive module names that build upon each other:\n\n${sourceContent}\n\nMain topics identified: ${structure.mainTopics?.join(', ') || 'Content analysis in progress'}\n\nRequirements:\n- Each module should be distinct and specific\n- Names should reflect actual content, not generic terms\n- Progressive difficulty from basic to advanced\n- Return ONLY the module names, one per line, no numbering or bullets`;
+      console.log(`🔍 Generating module names with ${optimalProvider}`);
+      console.log(`🔑 API Key status for ${optimalProvider}: ${optimalApiKey ? 'Available' : 'Missing'}`);
+      
+      // Safely extract main topics from structure
+      const mainTopics = (structure && structure.mainTopics && Array.isArray(structure.mainTopics)) 
+        ? structure.mainTopics.join(', ') 
+        : 'Content analysis in progress';
+      
+      const prompt = `Based on this course content, create ${questionAnswers.moduleCount} progressive module names that build upon each other:\n\n${sourceContent}\n\nMain topics identified: ${mainTopics}\n\nRequirements:\n- Each module should be distinct and specific\n- Names should reflect actual content, not generic terms\n- Progressive difficulty from basic to advanced\n- Return ONLY the module names, one per line, no numbering or bullets`;
+      
+      console.log(`📝 Module name prompt length: ${prompt.length} characters`);
+      console.log(`🎯 Requesting ${questionAnswers.moduleCount} module names`);
       
       const response = await makeAIRequest([{ role: 'user', content: prompt }], optimalApiKey, getTokenLimit('moduleNames'), 0.7, optimalProvider);
       
-      const moduleNames = response.split('\n')
+      console.log(`✅ Module name response received: ${response?.substring(0, 200)}...`);
+      
+      const moduleNames = (response || '')
+        .split('\n')
         .map(name => name.trim())
         .filter(name => name.length > 0)
         .slice(0, questionAnswers.moduleCount);
@@ -1426,14 +724,21 @@ PRODUCE a comprehensive JSON analysis with:
         [...moduleNames, ...Array.from({length: questionAnswers.moduleCount - moduleNames.length}, (_, i) => `Module ${moduleNames.length + i + 1}`)];
         
     } catch (error) {
-      console.error('Error generating module names:', error);
+      console.error('❌ Error generating module names:', error);
+      console.error('❌ Error details:', {
+        message: error.message,
+        stack: error.stack,
+        name: error.name
+      });
       
       // Parse error details if available
       let errorDetails = {};
       try {
         errorDetails = JSON.parse(error.message);
+        console.error('❌ Parsed error details:', errorDetails);
       } catch (e) {
         errorDetails = { errorType: 'UNKNOWN', message: error.message };
+        console.error('❌ Could not parse error as JSON, using raw message');
       }
       
       // Show user-friendly error message
@@ -1463,7 +768,10 @@ PRODUCE a comprehensive JSON analysis with:
     try {
       // Use smart provider selection for lesson count
       const optimalProvider = selectOptimalProvider('lessonCount', sourceContent.length);
-      const optimalApiKey = storedApiKeys[optimalProvider] || apiKey;
+      const optimalApiKey = getApiKeyForProvider(optimalProvider);
+      
+      console.log(`🔍 Determining lesson count with ${optimalProvider}`);
+      console.log(`🔑 API Key status for ${optimalProvider}: ${optimalApiKey ? 'Available' : 'Missing'}`);
       
       const prompt = `For the module "${moduleName}" based on this content:\n\n${sourceContent}\n\nDetermine the optimal number of lessons (between 2-8) needed to thoroughly cover this module. Consider:\n- Content complexity\n- Learning objectives\n- Student comprehension\n\nReturn ONLY a single number.`;
       
@@ -1509,7 +817,10 @@ PRODUCE a comprehensive JSON analysis with:
     try {
       // Use smart provider selection for module description
       const optimalProvider = selectOptimalProvider('moduleDescription', sourceContent.length);
-      const optimalApiKey = storedApiKeys[optimalProvider] || apiKey;
+      const optimalApiKey = getApiKeyForProvider(optimalProvider);
+      
+      console.log(`🔍 Generating module description with ${optimalProvider}`);
+      console.log(`🔑 API Key status for ${optimalProvider}: ${optimalApiKey ? 'Available' : 'Missing'}`);
       
       const prompt = `Create a compelling 2-3 sentence description for the module "${moduleName}" based on this source material:\n\n${sourceContent}\n\nThe description should:\n- Explain what students will learn\n- Highlight key outcomes\n- Be specific to the actual content, not generic`;
       
@@ -1550,7 +861,10 @@ PRODUCE a comprehensive JSON analysis with:
     try {
       // Use smart provider selection for lesson generation
       const optimalProvider = selectOptimalProvider('lessonGeneration', sourceContent.length);
-      const optimalApiKey = storedApiKeys[optimalProvider] || apiKey;
+      const optimalApiKey = getApiKeyForProvider(optimalProvider);
+      
+      console.log(`🔍 Generating lesson with ${optimalProvider}`);
+      console.log(`🔑 API Key status for ${optimalProvider}: ${optimalApiKey ? 'Available' : 'Missing'}`);
       
       const duration = Math.floor(Math.random() * 25) + 15; // 15-40 minutes
       const systemPrompt = createSystemPrompt(sourceContent, formData, questionAnswers);
@@ -1813,641 +1127,9 @@ Comprehensive lesson with proper IP attribution and hands-on activities.`;
     }
   };
   
-  // API Key Modal Component
-  const renderApiKeyModal = () => {
-    if (!showApiKeyModal) return null;
-    
-    return (
-      <div style={{
-        position: 'fixed',
-        top: 0,
-        left: 0,
-        right: 0,
-        bottom: 0,
-        backgroundColor: 'rgba(0,0,0,0.5)',
-        display: 'flex',
-        justifyContent: 'center',
-        alignItems: 'center',
-        zIndex: 1000
-      }}>
-        <div style={{
-          backgroundColor: 'white',
-          padding: '30px',
-          borderRadius: '12px',
-          maxWidth: '500px',
-          width: '90%',
-          boxShadow: '0 4px 20px rgba(0,0,0,0.15)'
-        }}>
-          <h2 style={{ color: '#2c3e50', marginBottom: '20px' }}>🤖 AI Configuration</h2>
-          <p style={{ marginBottom: '20px', color: '#666' }}>
-            To generate AI-powered courses, please configure your API key for either OpenAI or Google Gemini.
-          </p>
-          
-          <div style={{ marginBottom: '20px' }}>
-            <label style={{ display: 'block', marginBottom: '10px', fontWeight: 'bold' }}>Choose AI Provider:</label>
-            <div style={{ display: 'flex', gap: '15px', marginBottom: '15px' }}>
-              <label style={{ display: 'flex', alignItems: 'center', cursor: 'pointer' }}>
-                  <input
-                    type="radio"
-                    value="openai"
-                    checked={apiProvider === 'openai'}
-                    onChange={(e) => setApiProvider(e.target.value)}
-                    style={{ marginRight: '8px' }}
-                  />
-                  OpenAI
-                </label>
-              <label style={{ display: 'flex', alignItems: 'center', cursor: 'pointer' }}>
-                <input
-                  type="radio"
-                  value="gemini"
-                  checked={apiProvider === 'gemini'}
-                  onChange={(e) => setApiProvider(e.target.value)}
-                  style={{ marginRight: '8px' }}
-                />
-                Google Gemini
-              </label>
-            </div>
-          </div>
-          
-          <div style={{ marginBottom: '20px' }}>
-            <label style={{ display: 'block', marginBottom: '10px', fontWeight: 'bold' }}>
-              {apiProvider === 'openai' ? 'OpenAI' : 'Gemini'} API Key:
-            </label>
-            <input
-              type="password"
-              value={apiKey}
-              onChange={(e) => setApiKey(e.target.value)}
-              placeholder={`Enter your ${apiProvider === 'openai' ? 'OpenAI' : 'Gemini'} API key`}
-              style={{
-                width: '100%',
-                padding: '10px',
-                borderRadius: '4px',
-                border: '1px solid #ddd',
-                fontSize: '14px'
-              }}
-            />
-            <p style={{ fontSize: '12px', color: '#666', marginTop: '5px' }}>
-              {apiProvider === 'openai' ? 
-                'Get your API key from: https://platform.openai.com/api-keys' :
-                'Get your API key from: https://makersuite.google.com/app/apikey'
-              }
-            </p>
-          </div>
-          
-          {(storedApiKeys.openai || storedApiKeys.gemini) && (
-            <div style={{ marginBottom: '20px', padding: '10px', backgroundColor: '#f8f9fa', borderRadius: '4px' }}>
-              <p style={{ fontSize: '12px', color: '#666', margin: 0 }}>
-                <strong>Current API Keys:</strong><br/>
-                OpenAI: {storedApiKeys.openai ? '✅ Configured' : '❌ Not set'}<br/>
-                Gemini: {storedApiKeys.gemini ? '✅ Configured' : '❌ Not set'}
-              </p>
-            </div>
-          )}
-          
-          <div style={{ display: 'flex', gap: '10px', justifyContent: 'flex-end' }}>
-            {(storedApiKeys.openai || storedApiKeys.gemini) && (
-              <button
-                onClick={() => setShowApiKeyModal(false)}
-                style={{
-                  padding: '10px 20px',
-                  backgroundColor: '#95a5a6',
-                  color: 'white',
-                  border: 'none',
-                  borderRadius: '4px',
-                  cursor: 'pointer'
-                }}
-              >
-                Cancel
-              </button>
-            )}
-            <button
-              onClick={clearApiKeys}
-              style={{
-                padding: '10px 20px',
-                backgroundColor: '#e74c3c',
-                color: 'white',
-                border: 'none',
-                borderRadius: '4px',
-                cursor: 'pointer'
-              }}
-            >
-              Clear All Keys
-            </button>
-            <button
-              onClick={saveApiKey}
-              style={{
-                padding: '10px 20px',
-                backgroundColor: '#3498db',
-                color: 'white',
-                border: 'none',
-                borderRadius: '4px',
-                cursor: 'pointer'
-              }}
-            >
-              Save API Key
-            </button>
-          </div>
-        </div>
-      </div>
-    );
-  };
+  // Old renderApiKeyModal function removed - now using ApiKeyManager component
   
-  // Render functions for each step
-  const renderStep1 = () => (
-    <div style={{ backgroundColor: "#f8f9fa", padding: "30px", borderRadius: "12px" }}>
-      <h2 style={{ color: "#2c3e50", marginBottom: "20px" }}>📚 Step 1: Course Information & Content Upload</h2>
-      
-      <div style={{ display: "grid", gap: "20px" }}>
-        <div style={{ backgroundColor: "white", padding: "20px", borderRadius: "8px" }}>
-          <label style={{ display: "block", marginBottom: "10px", fontWeight: "bold" }}>Course Title:</label>
-          <input
-            type="text"
-            value={formData.title}
-            onChange={(e) => handleInputChange('title', e.target.value)}
-            style={{ width: "100%", padding: "10px", borderRadius: "4px", border: "1px solid #ddd" }}
-            placeholder="Enter your course title"
-            autoComplete="off"
-          />
-        </div>
-        
-        <div style={{ backgroundColor: "white", padding: "20px", borderRadius: "8px" }}>
-          <label style={{ display: "block", marginBottom: "10px", fontWeight: "bold" }}>Course Description:</label>
-          <textarea
-            value={formData.description}
-            onChange={(e) => handleInputChange('description', e.target.value)}
-            style={{ width: "100%", padding: "10px", borderRadius: "4px", border: "1px solid #ddd", minHeight: "100px" }}
-            placeholder="Describe what your course covers"
-          />
-        </div>
-        
-        <div style={{ backgroundColor: "white", padding: "20px", borderRadius: "8px" }}>
-          <label style={{ display: "block", marginBottom: "10px", fontWeight: "bold" }}>Course Material:</label>
-          
-          {/* Input method selector */}
-          <div style={{ marginBottom: "15px" }}>
-            <label style={{ display: "flex", alignItems: "center", marginBottom: "10px" }}>
-              <input
-                type="radio"
-                name="inputMethod"
-                value="file"
-                checked={inputMethod === "file"}
-                onChange={(e) => handleInputMethodChange(e.target.value)}
-                style={{ marginRight: "8px" }}
-              />
-              📁 Upload File (PDF, TXT, DOCX)
-            </label>
-            <label style={{ display: "flex", alignItems: "center" }}>
-              <input
-                type="radio"
-                name="inputMethod"
-                value="text"
-                checked={inputMethod === "text"}
-                onChange={(e) => handleInputMethodChange(e.target.value)}
-                style={{ marginRight: "8px" }}
-              />
-              ✏️ Paste or Type Text
-            </label>
-          </div>
-          
-          {/* File upload section */}
-          {inputMethod === "file" && (
-            <div>
-              <input
-                type="file"
-                onChange={handleFileUpload}
-                accept=".txt,.pdf,.docx"
-                style={{ marginBottom: "10px" }}
-              />
-              <p style={{ fontSize: "12px", color: "#666", marginTop: "5px" }}>
-                ✅ Hybrid PDF extraction with multiple fallback methods for maximum compatibility
-              </p>
-            </div>
-          )}
-          
-          {/* Manual text input section */}
-          {inputMethod === "text" && (
-            <div>
-              <textarea
-                value={manualTextInput}
-                onChange={(e) => handleManualTextChange(e.target.value)}
-                placeholder="Paste your course content here or type it directly...\n\nYou can include:\n• Course outlines\n• Lecture notes\n• Book chapters\n• Articles\n• Any text-based material"
-                style={{
-                  width: "100%",
-                  minHeight: "200px",
-                  padding: "15px",
-                  borderRadius: "4px",
-                  border: "1px solid #ddd",
-                  fontSize: "14px",
-                  fontFamily: "Arial, sans-serif",
-                  resize: "vertical"
-                }}
-              />
-              <p style={{ fontSize: "12px", color: "#666", marginTop: "5px" }}>
-                💡 Tip: You can copy and paste content from PDFs, websites, or documents
-              </p>
-            </div>
-          )}
-          
-          {/* Content preview */}
-          {uploadedContent && (
-            <div style={{ marginTop: "15px", padding: "10px", backgroundColor: "#f8f9fa", borderRadius: "4px" }}>
-              <p><strong>Content preview ({uploadedContent.length} characters):</strong></p>
-              <p style={{ fontSize: "12px", color: "#666", maxHeight: "100px", overflow: "auto" }}>
-                {uploadedContent.substring(0, 300)}...
-              </p>
-            </div>
-          )}
-        </div>
-      </div>
-      
-      <button
-        onClick={() => setStep(2)}
-        disabled={!formData.title || !formData.description}
-        style={{
-          marginTop: "20px",
-          padding: "12px 24px",
-          backgroundColor: formData.title && formData.description ? "#3498db" : "#bdc3c7",
-          color: "white",
-          border: "none",
-          borderRadius: "6px",
-          cursor: formData.title && formData.description ? "pointer" : "not-allowed"
-        }}
-      >
-        Next: AI Questionnaire →
-      </button>
-    </div>
-  );
-  
-  const renderStep2 = () => (
-    <div style={{ backgroundColor: "#f8f9fa", padding: "30px", borderRadius: "12px" }}>
-      <h2 style={{ color: "#2c3e50", marginBottom: "20px" }}>🤖 Step 2: AI Questionnaire</h2>
-      
-      <div style={{ display: "grid", gap: "20px" }}>
-        <div style={{ backgroundColor: "white", padding: "20px", borderRadius: "8px" }}>
-          <label style={{ display: "block", marginBottom: "10px", fontWeight: "bold" }}>📚 Number of Course Modules:</label>
-          <select
-            value={questionAnswers.moduleCount}
-            onChange={(e) => handleQuestionChange('moduleCount', parseInt(e.target.value))}
-            style={{ padding: "10px", borderRadius: "4px", border: "1px solid #ddd", width: "100%" }}
-          >
-            <option value={2}>2 Modules - Quick & Focused</option>
-            <option value={3}>3 Modules - Balanced Structure</option>
-            <option value={4}>4 Modules - Comprehensive</option>
-            <option value={5}>5 Modules - In-depth Coverage</option>
-            <option value={6}>6+ Modules - Extensive Course</option>
-          </select>
-          <p style={{ fontSize: "12px", color: "#666", marginTop: "5px" }}>
-            More modules allow better pacing and digestible learning chunks
-          </p>
-        </div>
-        
-        <div style={{ backgroundColor: "white", padding: "20px", borderRadius: "8px" }}>
-          <label style={{ display: "block", marginBottom: "10px", fontWeight: "bold" }}>🏷️ Module Naming Preference:</label>
-          <select
-            value={questionAnswers.moduleNaming}
-            onChange={(e) => handleQuestionChange('moduleNaming', e.target.value)}
-            style={{ padding: "10px", borderRadius: "4px", border: "1px solid #ddd", width: "100%" }}
-          >
-            <option value="ai-generated">Let AI suggest module names</option>
-            <option value="custom">I'll provide custom module names</option>
-            <option value="collaborative">AI suggests, I can modify</option>
-          </select>
-          
-          {questionAnswers.moduleNaming === 'custom' && (
-            <div style={{ marginTop: "15px" }}>
-              <p style={{ marginBottom: "10px", fontWeight: "bold" }}>Enter your module names:</p>
-              {Array.from({ length: questionAnswers.moduleCount }, (_, i) => (
-                <input
-                  key={i}
-                  type="text"
-                  placeholder={`Module ${i + 1} name`}
-                  value={questionAnswers.customModuleNames[i] || ''}
-                  onChange={(e) => handleCustomModuleNameChange(i, e.target.value)}
-                  style={{
-                    width: "100%",
-                    padding: "8px",
-                    margin: "5px 0",
-                    borderRadius: "4px",
-                    border: "1px solid #ddd"
-                  }}
-                />
-              ))}
-            </div>
-          )}
-        </div>
-        
-        <div style={{ backgroundColor: "white", padding: "20px", borderRadius: "8px" }}>
-          <label style={{ display: "block", marginBottom: "10px", fontWeight: "bold" }}>Preferred Course Length:</label>
-          <select
-            value={questionAnswers.courseLength}
-            onChange={(e) => handleQuestionChange('courseLength', e.target.value)}
-            style={{ padding: "10px", borderRadius: "4px", border: "1px solid #ddd", width: "100%" }}
-          >
-            <option value="short">Short (1-2 hours)</option>
-            <option value="medium">Medium (3-5 hours)</option>
-            <option value="long">Long (6+ hours)</option>
-          </select>
-        </div>
-        
-        <div style={{ backgroundColor: "white", padding: "20px", borderRadius: "8px" }}>
-          <label style={{ display: "block", marginBottom: "10px", fontWeight: "bold" }}>Learning Style Focus:</label>
-          <select
-            value={questionAnswers.learningStyle}
-            onChange={(e) => handleQuestionChange('learningStyle', e.target.value)}
-            style={{ padding: "10px", borderRadius: "4px", border: "1px solid #ddd", width: "100%" }}
-          >
-            <option value="visual">Visual (diagrams, charts)</option>
-            <option value="auditory">Auditory (explanations, discussions)</option>
-            <option value="kinesthetic">Kinesthetic (hands-on, practical)</option>
-            <option value="mixed">Mixed approach</option>
-          </select>
-        </div>
-      </div>
-      
-      <div style={{ marginTop: "20px", display: "flex", gap: "10px" }}>
-        <button
-          onClick={() => setStep(1)}
-          style={{
-            padding: "12px 24px",
-            backgroundColor: "#95a5a6",
-            color: "white",
-            border: "none",
-            borderRadius: "6px",
-            cursor: "pointer"
-          }}
-        >
-          ← Back
-        </button>
-        <button
-          onClick={() => setStep(3)}
-          style={{
-            padding: "12px 24px",
-            backgroundColor: "#3498db",
-            color: "white",
-            border: "none",
-            borderRadius: "6px",
-            cursor: "pointer"
-          }}
-        >
-          Next: Multimedia Options →
-        </button>
-      </div>
-    </div>
-  );
-  
-  const renderStep3 = () => (
-    <div style={{ backgroundColor: "#f8f9fa", padding: "30px", borderRadius: "12px" }}>
-      <h2 style={{ color: "#2c3e50", marginBottom: "20px" }}>🎬 Step 3: Multimedia Content Preferences</h2>
-      
-      <div style={{ display: "grid", gap: "20px" }}>
-        <div style={{ backgroundColor: "white", padding: "20px", borderRadius: "8px" }}>
-          <label style={{ display: "flex", alignItems: "center", marginBottom: "15px" }}>
-            <input
-              type="checkbox"
-              checked={multimediaPrefs.includeAudio}
-              onChange={(e) => setMultimediaPrefs(prev => ({ ...prev, includeAudio: e.target.checked }))}
-              style={{ marginRight: "10px" }}
-            />
-            <span style={{ fontWeight: "bold" }}>🎵 Include Audio Content</span>
-          </label>
-          
-          {multimediaPrefs.includeAudio && (
-            <div style={{ marginLeft: "25px" }}>
-              <label style={{ display: "block", marginBottom: "5px" }}>Voice Style:</label>
-              <select
-                value={multimediaPrefs.voiceStyle}
-                onChange={(e) => setMultimediaPrefs(prev => ({ ...prev, voiceStyle: e.target.value }))}
-                style={{ padding: "8px", borderRadius: "4px", border: "1px solid #ddd" }}
-              >
-                <option value="professional">Professional</option>
-                <option value="conversational">Conversational</option>
-                <option value="energetic">Energetic</option>
-              </select>
-            </div>
-          )}
-        </div>
-        
-        <div style={{ backgroundColor: "white", padding: "20px", borderRadius: "8px" }}>
-          <label style={{ display: "flex", alignItems: "center", marginBottom: "15px" }}>
-            <input
-              type="checkbox"
-              checked={multimediaPrefs.includeVideo}
-              onChange={(e) => setMultimediaPrefs(prev => ({ ...prev, includeVideo: e.target.checked }))}
-              style={{ marginRight: "10px" }}
-            />
-            <span style={{ fontWeight: "bold" }}>🎥 Include Video Content</span>
-          </label>
-          
-          {multimediaPrefs.includeVideo && (
-            <div style={{ marginLeft: "25px" }}>
-              <label style={{ display: "block", marginBottom: "5px" }}>Video Format:</label>
-              <select
-                value={multimediaPrefs.videoFormat}
-                onChange={(e) => setMultimediaPrefs(prev => ({ ...prev, videoFormat: e.target.value }))}
-                style={{ padding: "8px", borderRadius: "4px", border: "1px solid #ddd" }}
-              >
-                <option value="presentation">Presentation Style</option>
-                <option value="screencast">Screen Recording</option>
-                <option value="talking-head">Talking Head</option>
-              </select>
-            </div>
-          )}
-        </div>
-      </div>
-      
-      <div style={{ marginTop: "20px", display: "flex", gap: "10px" }}>
-        <button
-          onClick={() => setStep(2)}
-          style={{
-            padding: "12px 24px",
-            backgroundColor: "#95a5a6",
-            color: "white",
-            border: "none",
-            borderRadius: "6px",
-            cursor: "pointer"
-          }}
-        >
-          ← Back
-        </button>
-        <button
-          onClick={() => setStep(4)}
-          style={{
-            padding: "12px 24px",
-            backgroundColor: "#3498db",
-            color: "white",
-            border: "none",
-            borderRadius: "6px",
-            cursor: "pointer"
-          }}
-        >
-          Next: Generate Course →
-        </button>
-      </div>
-    </div>
-  );
-  
-  const renderStep4 = () => (
-    <div style={{ backgroundColor: "#f8f9fa", padding: "30px", borderRadius: "12px", textAlign: "center" }}>
-      <h2 style={{ color: "#2c3e50", marginBottom: "20px" }}>⚡ Step 4: AI Course Generation</h2>
-      
-      {!isGenerating ? (
-        <div>
-          <p style={{ marginBottom: "20px", fontSize: "16px" }}>
-            Ready to generate your course with AI! This will create:
-          </p>
-          <ul style={{ textAlign: "left", maxWidth: "400px", margin: "0 auto 20px" }}>
-            <li>{questionAnswers.moduleCount} modules with custom structure</li>
-            <li>Comprehensive lesson content</li>
-            <li>Interactive elements and assessments</li>
-            {multimediaPrefs.includeAudio && <li>Audio narration</li>}
-            {multimediaPrefs.includeVideo && <li>Video content</li>}
-          </ul>
-          
-          <button
-            onClick={generateCourseWithMultimedia}
-            style={{
-              padding: "15px 30px",
-              backgroundColor: "#27ae60",
-              color: "white",
-              border: "none",
-              borderRadius: "8px",
-              fontSize: "16px",
-              cursor: "pointer"
-            }}
-          >
-            🚀 Generate My Course
-          </button>
-        </div>
-      ) : (
-        <div>
-          <div style={{ marginBottom: "20px" }}>
-            <div style={{
-              width: "50px",
-              height: "50px",
-              border: "5px solid #f3f3f3",
-              borderTop: "5px solid #3498db",
-              borderRadius: "50%",
-              animation: "spin 1s linear infinite",
-              margin: "0 auto 20px"
-            }}></div>
-          </div>
-          <h3>🤖 AI is generating your course...</h3>
-          <p>This may take a few moments. Please wait.</p>
-        </div>
-      )}
-      
-      <div style={{ marginTop: "20px" }}>
-        <button
-          onClick={() => setStep(3)}
-          disabled={isGenerating}
-          style={{
-            padding: "12px 24px",
-            backgroundColor: isGenerating ? "#bdc3c7" : "#95a5a6",
-            color: "white",
-            border: "none",
-            borderRadius: "6px",
-            cursor: isGenerating ? "not-allowed" : "pointer"
-          }}
-        >
-          ← Back
-        </button>
-      </div>
-    </div>
-  );
-  
-  const renderStep5 = () => (
-    <div style={{ backgroundColor: "#f8f9fa", padding: "30px", borderRadius: "12px" }}>
-      <h2 style={{ color: "#2c3e50", marginBottom: "20px" }}>📋 Step 5: Review & Edit Generated Course</h2>
-      
-      {generatedCourse && (
-        <div>
-          <div style={{ backgroundColor: "white", padding: "20px", borderRadius: "8px", marginBottom: "20px" }}>
-            <h3>{generatedCourse.title}</h3>
-            <p><strong>Description:</strong> {generatedCourse.description}</p>
-            <p><strong>Modules:</strong> {generatedCourse.modules.length}</p>
-            
-            {/* Show module breakdown with individual durations */}
-            <div style={{ marginTop: "15px" }}>
-              <h4 style={{ fontSize: "16px", marginBottom: "10px" }}>Module Breakdown:</h4>
-              {generatedCourse.modules.map((module, index) => {
-                const moduleDuration = module.lessons.reduce((acc, lesson) => acc + (lesson.duration || 0), 0);
-                return (
-                  <div key={module.id} style={{ marginBottom: "8px", fontSize: "14px" }}>
-                    <strong>{module.title}:</strong> {module.lessons.length} lessons, {moduleDuration} minutes
-                  </div>
-                );
-              })}
-              <div style={{ marginTop: "10px", paddingTop: "10px", borderTop: "1px solid #eee", fontWeight: "bold" }}>
-                <strong>Total Duration:</strong> {generatedCourse.metadata.estimatedDuration} minutes ({Math.round(generatedCourse.metadata.estimatedDuration / 60)} hours)
-              </div>
-            </div>
-          </div>
-          
-          <div style={{ marginBottom: "20px" }}>
-            <h4>Course Content:</h4>
-            {generatedCourse.modules.map((module, moduleIndex) => (
-              <div key={module.id} style={{ backgroundColor: "white", padding: "15px", borderRadius: "8px", marginBottom: "15px" }}>
-                <h5 style={{ color: "#2c3e50" }}>{module.title}</h5>
-                <p style={{ fontSize: "14px", color: "#666" }}>{module.description}</p>
-                
-                {module.lessons.map((lesson, lessonIndex) => (
-                  <div key={lesson.id} style={{ marginLeft: "20px", marginTop: "10px", padding: "10px", backgroundColor: "#f8f9fa", borderRadius: "4px" }}>
-                    <h6>{lesson.title}</h6>
-                    <textarea
-                      value={editingContent[`${moduleIndex}-${lessonIndex}`] || lesson.markdownContent || lesson.content || ''}
-                      onChange={(e) => handleContentEdit(moduleIndex, lessonIndex, e.target.value)}
-                      style={{
-                        width: "100%",
-                        minHeight: "100px",
-                        padding: "10px",
-                        borderRadius: "4px",
-                        border: "1px solid #ddd",
-                        fontSize: "14px"
-                      }}
-                    />
-                    <p style={{ fontSize: "12px", color: "#666", marginTop: "5px" }}>
-                      Duration: {lesson.duration} minutes
-                      {lesson.multimedia?.hasAudio && " | 🎵 Audio"}
-                      {lesson.multimedia?.hasVideo && " | 🎥 Video"}
-                    </p>
-                  </div>
-                ))}
-              </div>
-            ))}
-          </div>
-          
-          <div style={{ display: "flex", gap: "10px" }}>
-            <button
-              onClick={() => setStep(4)}
-              style={{
-                padding: "12px 24px",
-                backgroundColor: "#95a5a6",
-                color: "white",
-                border: "none",
-                borderRadius: "6px",
-                cursor: "pointer"
-              }}
-            >
-              ← Back to Generation
-            </button>
-            <button
-              onClick={saveCourse}
-              style={{
-                padding: "12px 24px",
-                backgroundColor: "#27ae60",
-                color: "white",
-                border: "none",
-                borderRadius: "6px",
-                cursor: "pointer"
-              }}
-            >
-              💾 Save Course
-            </button>
-          </div>
-        </div>
-      )}
-    </div>
-  );
+  // Old render functions removed - now using separate components
   
   return (
     <div style={{ maxWidth: "800px", margin: "0 auto", padding: "20px" }}>
@@ -2461,7 +1143,48 @@ Comprehensive lesson with proper IP attribution and hands-on activities.`;
       </style>
       
       <div style={{ marginBottom: "30px", textAlign: "center" }}>
-        <h1 style={{ color: "#2c3e50" }}>🎓 AI-Powered Course Creator</h1>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: "20px", marginBottom: "10px" }}>
+          <h1 style={{ color: "#2c3e50", margin: "0" }}>🎓 AI-Powered Course Creator</h1>
+          <button
+            onClick={() => setShowApiKeyModal(true)}
+            style={{
+              backgroundColor: "#3498db",
+              color: "white",
+              border: "none",
+              padding: "8px 16px",
+              borderRadius: "6px",
+              cursor: "pointer",
+              fontSize: "14px",
+              fontWeight: "bold",
+              display: "flex",
+              alignItems: "center",
+              gap: "6px"
+            }}
+            title="Configure API Keys for ChatGPT and Gemini"
+          >
+            🔑 API Keys
+          </button>
+          <button
+            onClick={() => {
+              console.log('🔧 MANUAL DEBUG TEST');
+              debugApiKeys();
+              testApiConnection();
+            }}
+            style={{
+              backgroundColor: "#e74c3c",
+              color: "white",
+              border: "none",
+              padding: "8px 16px",
+              borderRadius: "6px",
+              cursor: "pointer",
+              fontSize: "14px",
+              fontWeight: "bold"
+            }}
+            title="Debug API Keys (Check Console)"
+          >
+            🐛 Debug
+          </button>
+        </div>
         <div style={{ display: "flex", justifyContent: "center", gap: "10px", marginTop: "20px" }}>
           {[1, 2, 3, 4, 5].map(stepNum => (
             <div
@@ -2484,14 +1207,95 @@ Comprehensive lesson with proper IP attribution and hands-on activities.`;
         </div>
       </div>
       
-      {step === 1 && renderStep1()}
-      {step === 2 && renderStep2()}
-      {step === 3 && renderStep3()}
-      {step === 4 && renderStep4()}
-      {step === 5 && renderStep5()}
+      {step === 1 && (
+        <ErrorBoundary fallbackMessage="Error in file upload step. Please refresh and try again.">
+          <FileUploadStep
+            formData={formData}
+            handleInputChange={handleInputChange}
+            uploadedContent={uploadedContent}
+            setUploadedContent={setUploadedContent}
+            uploadedFile={uploadedFile}
+            setUploadedFile={setUploadedFile}
+            inputMethod={inputMethod}
+            handleInputMethodChange={handleInputMethodChange}
+            manualTextInput={manualTextInput}
+            handleManualTextChange={handleManualTextChange}
+            handleFileUpload={handleFileUpload}
+            onNext={() => {
+              if (validateCurrentStep(1, formData, uploadedContent, questionAnswers, multimediaPrefs)) {
+                setStep(2);
+              }
+            }}
+          />
+        </ErrorBoundary>
+      )}
       
-      {/* Add this line to render the API key modal */}
-      {renderApiKeyModal()}
+      {step === 2 && (
+        <ErrorBoundary fallbackMessage="Error in questionnaire step. Please refresh and try again.">
+          <QuestionnaireStep
+            questionAnswers={questionAnswers}
+            handleQuestionChange={handleQuestionChange}
+            handleCustomModuleNameChange={handleCustomModuleNameChange}
+            onNext={() => {
+              if (validateCurrentStep(2, formData, uploadedContent, questionAnswers, multimediaPrefs)) {
+                setStep(3);
+              }
+            }}
+            onBack={() => setStep(1)}
+          />
+        </ErrorBoundary>
+      )}
+      
+      {step === 3 && (
+        <ErrorBoundary fallbackMessage="Error in multimedia step. Please refresh and try again.">
+          <MultimediaStep
+            multimediaPrefs={multimediaPrefs}
+            setMultimediaPrefs={setMultimediaPrefs}
+            onNext={() => {
+              if (validateCurrentStep(3, formData, uploadedContent, questionAnswers, multimediaPrefs)) {
+                setStep(4);
+              }
+            }}
+            onBack={() => setStep(2)}
+          />
+        </ErrorBoundary>
+      )}
+      
+      {step === 4 && (
+        <ErrorBoundary fallbackMessage="Error in generation step. Please refresh and try again.">
+          <GenerationStep
+            isGenerating={isGenerating}
+            questionAnswers={questionAnswers}
+            multimediaPrefs={multimediaPrefs}
+            onGenerate={generateCourseWithMultimedia}
+            onBack={() => setStep(3)}
+          />
+        </ErrorBoundary>
+      )}
+      
+      {step === 5 && (
+        <ErrorBoundary fallbackMessage="Error in course preview. Please refresh and try again.">
+          <CoursePreview
+            generatedCourse={generatedCourse}
+            editingContent={editingContent}
+            handleContentEdit={handleContentEdit}
+            onSave={saveCourse}
+            onBack={() => setStep(4)}
+          />
+        </ErrorBoundary>
+      )}
+      
+      <ApiKeyManager
+        showApiKeyModal={showApiKeyModal}
+        setShowApiKeyModal={setShowApiKeyModal}
+        apiProvider={apiProvider}
+        setApiProvider={setApiProvider}
+        apiKey={apiKey}
+        setApiKey={setApiKey}
+        storedApiKeys={storedApiKeys}
+        saveApiKey={saveApiKey}
+        clearApiKeys={clearApiKeys}
+      />
     </div>
   );
 }

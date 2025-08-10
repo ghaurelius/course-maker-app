@@ -7,6 +7,7 @@ import {
 } from "react-router-dom";
 import { AuthProvider, useAuth } from "./contexts/AuthContext";
 import { EnrollmentProvider } from "./contexts/EnrollmentContext";
+import { ToastProvider } from "./components/Toast";
 import Login from "./components/Login";
 import Register from "./components/Register";
 import Dashboard from "./components/Dashboard";
@@ -48,7 +49,8 @@ function App() {
   return (
     <AuthProvider>
       <EnrollmentProvider>
-        <Router>
+        <ToastProvider>
+          <Router>
           <div className="App">
             <Routes>
               <Route path="/" element={<Navigate to="/login" />} />
@@ -112,7 +114,8 @@ function App() {
               <Route path="/course/:courseId" element={<CourseViewer />} />
             </Routes>
           </div>
-        </Router>
+          </Router>
+        </ToastProvider>
       </EnrollmentProvider>
     </AuthProvider>
   );

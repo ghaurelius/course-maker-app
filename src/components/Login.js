@@ -21,6 +21,7 @@ function Login() {
       setEmail(savedEmail);
       setPassword(savedPassword);
       setRememberMe(true);
+      console.log('🔐 Loaded saved credentials for remember me functionality');
     }
   }, []);
 
@@ -42,7 +43,7 @@ function Login() {
         localStorage.removeItem('remember_me');
       }
       
-      await login(email, password);
+      await login(email, password, rememberMe);
       navigate("/dashboard");
     } catch (error) {
       setError("Failed to log in: " + error.message);
