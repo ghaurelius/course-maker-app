@@ -467,46 +467,70 @@ function CourseCreator() {
     }
   };
   
-  // Ultra-high token limits leveraging full LLM capabilities
+  // Model token limits for validation
+  const MODEL_MAX_TOKENS = {
+    'gpt-4o': 16384,
+    'gpt-4': 8192,
+    'gpt-3.5-turbo': 4096
+  };
+
+  // Validate token requests against model limits
+  const validateTokenRequest = (maxTokens, operation = 'default') => {
+    const modelLimit = MODEL_MAX_TOKENS['gpt-4o'] || 4096;
+    const safeLimit = Math.min(maxTokens, modelLimit - 100); // 100 token buffer
+    
+    if (maxTokens > modelLimit) {
+      console.warn(`⚠️ Token request ${maxTokens} exceeds model limit ${modelLimit} for operation '${operation}', using ${safeLimit}`);
+    }
+    
+    return safeLimit;
+  };
+
+  // CORRECTED TOKEN LIMITS - Conservative limits within OpenAI's actual model limits
   const TOKEN_LIMITS = {
     openai: {
-      analysis: 50000,        // Was 1200 - now 40x larger for comprehensive analysis
-      lessonGeneration: 80000, // Was 2500 - now 32x larger for detailed lessons
-      moduleDescription: 15000, // Was 150 - now 100x larger for rich descriptions
-      moduleNames: 10000,     // Was 250 - now 40x larger for creative naming
-      lessonCount: 5000       // Was 10 - now 500x larger for thorough planning
+      analysis: 4000,        // Conservative limit for analysis (was 50000)
+      lessonGeneration: 3000, // Conservative limit for lesson generation (was 80000)
+      moduleDescription: 2000, // Conservative limit for module descriptions (was 15000)
+      moduleNames: 1000,     // Conservative limit for module naming (was 10000)
+      lessonCount: 1000      // Conservative limit for lesson counting (was 5000)
     },
     gemini: {
-      analysis: 50000,        // Reduced from 150000
-      lessonGeneration: 80000, // Reduced from 200000
-      moduleDescription: 20000, // Reduced from 50000
-      moduleNames: 10000,     // Reduced from 30000
-      lessonCount: 5000       // Reduced from 15000
+      analysis: 4000,        // Conservative limit for analysis (was 50000)
+      lessonGeneration: 3000, // Conservative limit for lesson generation (was 80000)
+      moduleDescription: 2000, // Conservative limit for module descriptions (was 20000)
+      moduleNames: 1000,     // Conservative limit for module naming (was 10000)
+      lessonCount: 1000      // Conservative limit for lesson counting (was 5000)
     }
   };
 
-  // For GPT-5 when available (400K context)
+  // For future GPT-5 - Conservative limits even for advanced models
   const GPT5_TOKEN_LIMITS = {
-    analysis: 120000,
-    lessonGeneration: 180000,
-    moduleDescription: 40000,
-    moduleNames: 25000,
-    lessonCount: 12000
+    analysis: 8000,        // Conservative for future models (was 120000)
+    lessonGeneration: 6000, // Conservative for future models (was 180000)
+    moduleDescription: 4000, // Conservative for future models (was 40000)
+    moduleNames: 2000,     // Conservative for future models (was 25000)
+    lessonCount: 2000      // Conservative for future models (was 12000)
   };
 
-  // Dynamic provider detection
+  // Dynamic provider detection with validation
   const getTokenLimit = (operation, modelVersion = 'standard') => {
+    let limit;
     if (modelVersion === 'gpt5' || apiProvider.includes('gpt-5')) {
-      return GPT5_TOKEN_LIMITS[operation];
+      limit = GPT5_TOKEN_LIMITS[operation];
+    } else {
+      limit = TOKEN_LIMITS[apiProvider]?.[operation] || TOKEN_LIMITS.openai[operation];
     }
-    return TOKEN_LIMITS[apiProvider]?.[operation] || TOKEN_LIMITS.openai[operation];
+    
+    // Validate against model limits
+    return validateTokenRequest(limit, operation);
   };
 
-  // File Chunking Configuration
+  // File Chunking Configuration - Conservative sizes
   const CHUNK_CONFIG = {
     maxChunkSize: {
-      openai: 15000,    // Conservative for GPT-4
-      gemini: 25000     // Larger chunks for Gemini's bigger context
+      openai: 8000,     // Reduced from 15000 for better token management
+      gemini: 12000     // Reduced from 25000 for better token management
     },
     overlapSize: 500,   // Overlap between chunks to maintain context
     minChunkSize: 1000, // Minimum viable chunk size
@@ -681,19 +705,19 @@ ${operation === 'analysis' ? 'Analyze this chunk and extract key information:' :
       };
       
       // Merge results from all chunks
-      successfulResults.forEach(chunkResult => {
-        try {
-          const parsed = JSON.parse(chunkResult.result);
-          if (parsed.sourceAnalysis) {
-            combinedAnalysis.sourceAnalysis.keyClaims.push(...(parsed.sourceAnalysis.keyClaims || []));
-            combinedAnalysis.sourceAnalysis.keyTerms.push(...(parsed.sourceAnalysis.keyTerms || []));
-            combinedAnalysis.sourceAnalysis.frameworks.push(...(parsed.sourceAnalysis.frameworks || []));
-            combinedAnalysis.sourceAnalysis.examples.push(...(parsed.sourceAnalysis.examples || []));
+        successfulResults.forEach(chunkResult => {
+          try {
+            const parsed = parseAIResponse(chunkResult.result); // Changed from JSON.parse
+            if (parsed.sourceAnalysis) {
+              combinedAnalysis.sourceAnalysis.keyClaims.push(...(parsed.sourceAnalysis.keyClaims || []));
+              combinedAnalysis.sourceAnalysis.keyTerms.push(...(parsed.sourceAnalysis.keyTerms || []));
+              combinedAnalysis.sourceAnalysis.frameworks.push(...(parsed.sourceAnalysis.frameworks || []));
+              combinedAnalysis.sourceAnalysis.examples.push(...(parsed.sourceAnalysis.examples || []));
+            }
+          } catch (e) {
+            console.warn(`Could not parse chunk result for merging:`, e);
           }
-        } catch (e) {
-          console.warn(`Could not parse chunk result for merging:`, e);
-        }
-      });
+        });
       
       // Deduplicate arrays
       Object.keys(combinedAnalysis.sourceAnalysis).forEach(key => {
@@ -734,6 +758,8 @@ ${operation === 'analysis' ? 'Analyze this chunk and extract key information:' :
     const currentProvider = providerOverride || apiProvider;
     try {
       if (currentProvider === 'openai') {
+        const validatedMaxTokens = validateTokenRequest(maxTokens, 'openai-request');
+        
         const response = await fetch('https://api.openai.com/v1/chat/completions', {
           method: 'POST',
           headers: {
@@ -743,7 +769,7 @@ ${operation === 'analysis' ? 'Analyze this chunk and extract key information:' :
           body: JSON.stringify({
             model: 'gpt-4o',
             messages: messages,
-            max_tokens: maxTokens,
+            max_tokens: validatedMaxTokens,
             temperature: temperature
           })
         });
@@ -898,6 +924,338 @@ OUTPUT REQUIREMENTS:
 - Incorporate the specified learning preferences`;
   };
 
+  // Enhanced parseAIResponse function with control character sanitization and progressive repair
+  const parseAIResponse = (response) => {
+    if (!response || typeof response !== 'string') {
+      console.warn('Invalid response: expected non-empty string, using fallback');
+      return createAnalysisFallback(new Error('Invalid response'), response);
+    }
+
+    // Step 1: Basic content extraction and cleanup
+    let content = response.trim();
+    
+    // Remove common markdown artifacts
+    content = content.replace(/```json\s*/g, '').replace(/```\s*/g, '');
+    
+    // Find JSON boundaries more precisely
+    const startIndex = content.indexOf('{');
+    if (startIndex === -1) {
+      console.warn('No JSON object found in response, using fallback');
+      return createAnalysisFallback(new Error('No JSON object found'), response);
+    }
+    
+    // Extract potential JSON content
+    content = content.substring(startIndex);
+    
+    // Step 2: Try direct parsing first
+    try {
+      return JSON.parse(content);
+    } catch (initialError) {
+      console.warn('Initial JSON parse failed, attempting repairs...', initialError.message);
+    }
+    
+    // Step 3: Try sanitization
+    try {
+      const sanitized = sanitizeJSONString(content);
+      return JSON.parse(sanitized);
+    } catch (sanitizeError) {
+      console.warn('Sanitized parse failed, trying basic repair...', sanitizeError.message);
+    }
+    
+    // Step 4: Try basic repair
+    try {
+      const basicRepaired = tryBasicRepair(content);
+      if (basicRepaired) {
+        return JSON.parse(basicRepaired);
+      }
+    } catch (basicError) {
+      console.warn('Basic repair failed, trying aggressive repair...', basicError.message);
+    }
+    
+    // Step 5: Try aggressive repair
+    try {
+      const aggressiveRepaired = tryAggressiveRepair(content);
+      if (aggressiveRepaired) {
+        return JSON.parse(aggressiveRepaired);
+      }
+    } catch (aggressiveError) {
+      console.warn('Aggressive repair failed, trying field extraction...', aggressiveError.message);
+    }
+    
+    // Step 6: Try field-by-field extraction
+    try {
+      const extracted = tryFieldByFieldExtraction(content);
+      if (extracted) {
+        return JSON.parse(extracted);
+      }
+    } catch (extractError) {
+      console.warn('Field extraction failed, using fallback...', extractError.message);
+    }
+    
+    // Step 7: Return structured fallback
+    console.error('All parsing attempts failed, returning fallback structure');
+    return createAnalysisFallback(new Error('JSON parsing failed after all repair attempts'), response);
+  };
+
+  // Enhanced helper function to sanitize JSON strings and fix control character issues
+  const sanitizeJSONString = (jsonString) => {
+    return jsonString
+      // Fix double-escaped quotes (\\" -> \")
+      .replace(/\\\\"/g, '\\"')
+      // Fix over-escaped quotes (\\\\" -> \")
+      .replace(/\\\\\\"/g, '\\"')
+      // Fix unescaped quotes within strings more carefully
+      .replace(/"([^"]*?)"([^,:}\]\s])([^"]*?)"/g, '"$1\\"$2$3"')
+      // Fix unescaped newlines in strings
+      .replace(/"([^"]*?)\n([^"]*?)"/g, '"$1\\n$2"')
+      // Fix unescaped tabs in strings
+      .replace(/"([^"]*?)\t([^"]*?)"/g, '"$1\\t$2"')
+      // Fix unescaped carriage returns
+      .replace(/"([^"]*?)\r([^"]*?)"/g, '"$1\\r$2"')
+      // Fix unescaped backslashes (but not already escaped ones)
+      .replace(/"([^"]*?)\\(?!["\\nrtbf\/u])([^"]*?)"/g, '"$1\\\\$2"')
+      // Remove problematic control characters (except common ones)
+      .replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, '')
+      // Normalize whitespace
+      .replace(/\s+/g, ' ')
+      // Remove trailing commas
+      .replace(/,\s*}/g, '}')
+      .replace(/,\s*]/g, ']')
+      // Fix common JSON syntax errors
+      .replace(/([^\\])\\([^"\\nrtbf\/u])/g, '$1\\\\$2')
+      // Remove any content after the last closing brace
+      .replace(/(}[^}]*)$/, '}');
+  };
+
+  // Basic repair attempt
+  const tryBasicRepair = (content) => {
+    // Extract JSON more carefully
+    let jsonContent = content;
+    
+    // Remove markdown
+    jsonContent = jsonContent.replace(/```json\s*/g, '').replace(/```\s*/g, '');
+    
+    // Find JSON boundaries more precisely
+    const startIndex = jsonContent.indexOf('{');
+    if (startIndex === -1) return null;
+    
+    let braceCount = 0;
+    let endIndex = -1;
+    
+    for (let i = startIndex; i < jsonContent.length; i++) {
+      if (jsonContent[i] === '{') braceCount++;
+      if (jsonContent[i] === '}') {
+        braceCount--;
+        if (braceCount === 0) {
+          endIndex = i;
+          break;
+        }
+      }
+    }
+    
+    if (endIndex === -1) return null;
+    
+    const extracted = jsonContent.substring(startIndex, endIndex + 1);
+    return sanitizeJSONString(extracted);
+  };
+
+  // Enhanced aggressive repair attempt
+  const tryAggressiveRepair = (content) => {
+    try {
+      // More aggressive cleaning
+      let cleaned = content
+        .replace(/```json/g, '')
+        .replace(/```/g, '')
+        .trim();
+      
+      // Find the main JSON object
+      const startBrace = cleaned.indexOf('{');
+      if (startBrace === -1) return null;
+      
+      // Extract only the JSON part, ignoring everything after the last }
+      let braceCount = 0;
+      let endBrace = -1;
+      let inString = false;
+      let escaped = false;
+      
+      for (let i = startBrace; i < cleaned.length; i++) {
+        const char = cleaned[i];
+        
+        if (escaped) {
+          escaped = false;
+          continue;
+        }
+        
+        if (char === '\\') {
+          escaped = true;
+          continue;
+        }
+        
+        if (char === '"') {
+          inString = !inString;
+          continue;
+        }
+        
+        if (!inString) {
+          if (char === '{') braceCount++;
+          if (char === '}') {
+            braceCount--;
+            if (braceCount === 0) {
+              endBrace = i;
+              break;
+            }
+          }
+        }
+      }
+      
+      if (endBrace === -1) return null;
+      
+      cleaned = cleaned.substring(startBrace, endBrace + 1);
+      
+      // Attempt to fix malformed strings by removing problematic characters
+      cleaned = cleaned
+        .replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, '') // Remove control chars except \n, \t, \r
+        .replace(/\\\\n/g, ' ') // Replace literal \\n with spaces
+        .replace(/\\\\t/g, ' ') // Replace literal \\t with spaces
+        .replace(/\\n/g, ' ') // Replace literal \n with spaces
+        .replace(/\\t/g, ' ') // Replace literal \t with spaces
+        .replace(/\n/g, ' ') // Replace actual newlines with spaces
+        .replace(/\t/g, ' ') // Replace actual tabs with spaces
+        .replace(/\r/g, ' ') // Replace carriage returns with spaces
+        .replace(/\s+/g, ' ') // Normalize whitespace
+        .replace(/,\s*}/g, '}') // Remove trailing commas
+        .replace(/,\s*]/g, ']') // Remove trailing commas in arrays
+        // Fix double-escaped quotes
+        .replace(/\\\\"/g, '\\"')
+        // Fix over-escaped quotes
+        .replace(/\\\\\\"/g, '\\"');
+      
+      return cleaned;
+    } catch (error) {
+      return null;
+    }
+  };
+
+  // Field-by-field extraction as last resort
+  const tryFieldByFieldExtraction = (content) => {
+    try {
+      // Extract recognizable JSON fields manually
+      const fields = {};
+      
+      // Extract arrays like keyClaims, keyTerms, etc.
+      const arrayMatches = content.match(/"(\w+)":\s*\[(.*?)\]/g);
+      if (arrayMatches) {
+        arrayMatches.forEach(match => {
+          const fieldMatch = match.match(/"(\w+)":\s*\[(.*?)\]/);
+          if (fieldMatch) {
+            const fieldName = fieldMatch[1];
+            const arrayContent = fieldMatch[2];
+            try {
+              // Simple array parsing
+              const items = arrayContent.split(',').map(item =>
+                item.trim().replace(/^"/, '').replace(/"$/, '')
+              ).filter(item => item.length > 0);
+              fields[fieldName] = items;
+            } catch (e) {
+              fields[fieldName] = [];
+            }
+          }
+        });
+      }
+      
+      // Extract simple string fields
+      const stringMatches = content.match(/"(\w+)":\s*"([^"]+)"/g);
+      if (stringMatches) {
+        stringMatches.forEach(match => {
+          const fieldMatch = match.match(/"(\w+)":\s*"([^"]+)"/);
+          if (fieldMatch) {
+            fields[fieldMatch[1]] = fieldMatch[2];
+          }
+        });
+      }
+      
+      // Build a basic structure
+      if (Object.keys(fields).length > 0) {
+        return JSON.stringify({
+          sourceAnalysis: {
+            keyClaims: fields.keyClaims || [],
+            keyTerms: fields.keyTerms || [],
+            frameworks: fields.frameworks || [],
+            examples: fields.examples || [],
+            authorVoice: fields.authorVoice || 'Professional'
+          },
+          courseBlueprint: {
+            targetAudience: fields.targetAudience || 'General learners',
+            prerequisites: fields.prerequisites || [],
+            learningOutcomes: fields.learningOutcomes || [],
+            syllabus: fields.syllabus || []
+          },
+          contentGaps: {
+            missingConcepts: fields.missingConcepts || [],
+            needsVerification: fields.needsVerification || [],
+            suggestedAdditions: fields.suggestedAdditions || []
+          },
+          scopeOptions: {
+            lite: { duration: '2-3 hours', modules: 2, focus: 'Core concepts' },
+            core: { duration: '4-6 hours', modules: 3, focus: 'Comprehensive' }
+          }
+        });
+      }
+      
+      return null;
+    } catch (error) {
+      return null;
+    }
+  };
+
+  // Create fallback analysis structure
+  const createAnalysisFallback = (error, rawResponse) => {
+    return {
+      sourceAnalysis: {
+        keyClaims: ['Content analysis performed with parsing limitations'],
+        keyTerms: ['Technical terminology identified'],
+        frameworks: ['Methodological approaches detected'],
+        examples: ['Practical examples noted'],
+        authorVoice: 'Professional and informative'
+      },
+      courseBlueprint: {
+        targetAudience: 'General learners',
+        prerequisites: ['Basic understanding of the subject matter'],
+        learningOutcomes: [
+          'Understand core concepts from the source material',
+          'Apply key principles in practical scenarios',
+          'Demonstrate competency in the subject area'
+        ],
+        syllabus: [
+          'Foundation concepts and terminology',
+          'Practical applications and examples',
+          'Advanced techniques and best practices'
+        ]
+      },
+      contentGaps: {
+        missingConcepts: ['Additional context may be needed'],
+        needsVerification: ['Source verification recommended'],
+        suggestedAdditions: ['Industry examples', 'Current best practices']
+      },
+      scopeOptions: {
+        lite: {
+          duration: '2-3 hours',
+          modules: 2,
+          focus: 'Essential concepts only'
+        },
+        core: {
+          duration: '4-6 hours',
+          modules: 3,
+          focus: 'Comprehensive coverage with examples'
+        }
+      },
+      error: error.message,
+      rawResponse: typeof rawResponse === 'string' ? rawResponse.substring(0, 1000) : rawResponse,
+      fallback: true,
+      timestamp: new Date().toISOString()
+    };
+  };
+
   const analyzeContentStructure = async (sourceContent, apiKey) => {
     try {
       // Use smart provider selection for analysis
@@ -1002,7 +1360,7 @@ PRODUCE a comprehensive JSON analysis with:
 }`;
       
       const analysisText = await makeAIRequest([{ role: 'user', content: analysisPrompt }], optimalApiKey, getTokenLimit('analysis'), 0.3, optimalProvider);
-      return JSON.parse(analysisText);
+      return parseAIResponse(analysisText);
     } catch (error) {
       console.error('Error in comprehensive content analysis:', error);
       
@@ -1044,55 +1402,7 @@ PRODUCE a comprehensive JSON analysis with:
       const userMessage = getUserFriendlyMessage(errorDetails);
       alert(`⚠️ Content Analysis Issue\n\n${userMessage}\n\nUsing fallback analysis based on your course information.`);
       
-      return {
-        sourceAnalysis: {
-          keyClaims: ['Core principles identified', 'Practical applications noted'],
-          keyTerms: ['Key terminology extracted'],
-          frameworks: ['Methodological approaches identified'],
-          examples: ['Real-world examples noted'],
-          authorVoice: 'Professional and informative'
-        },
-        courseBlueprint: {
-          targetAudience: formData.targetAudience,
-          prerequisites: ['Basic understanding of the subject'],
-          learningOutcomes: ['Understand core concepts', 'Apply practical skills', 'Demonstrate competency'],
-          syllabus: ['Foundation concepts', 'Practical applications', 'Advanced techniques']
-        },
-        contentGaps: {
-          missingConcepts: ['Additional context needed'],
-          needsVerification: ['Source verification required'],
-          suggestedAdditions: ['Industry examples', 'Current trends']
-        },
-        scopeOptions: {
-          lite: { duration: '2-3 hours', modules: 2, focus: 'Essential concepts only' },
-          core: { duration: '4-6 hours', modules: questionAnswers.moduleCount, focus: 'Comprehensive coverage' },
-          deepDive: { duration: '8-12 hours', modules: questionAnswers.moduleCount + 2, focus: 'Advanced applications' }
-        },
-        assessmentStrategy: {
-          formativeAssessments: ['Knowledge checks', 'Quick exercises'],
-          summativeAssessments: ['Project work', 'Practical demonstrations'],
-          rubricAreas: ['Understanding', 'Application', 'Quality']
-        },
-        proposedAssets: {
-          worksheets: ['Practice exercises', 'Planning templates'],
-          templates: ['Project templates', 'Checklists'],
-          resources: ['Additional readings', 'Tool recommendations']
-        },
-        clarificationQuestions: [
-          'What specific outcomes are most important for your learners?',
-          'Are there industry-specific examples you\'d like included?',
-          'What tools or platforms should learners be familiar with?',
-          'How technical should the content be for your audience?',
-          'Are there any topics that should be emphasized or avoided?'
-        ],
-        aiProcessingStatus: {
-          failed: true,
-          errorType: errorDetails.errorType,
-          errorMessage: userMessage,
-          timestamp: errorDetails.timestamp,
-          canRetry: ['RATE_LIMIT', 'SERVER_ERROR', 'NETWORK_ERROR'].includes(errorDetails.errorType)
-        }
-      };
+      return createAnalysisFallback(error, error.message);
     }
   };
   
@@ -1330,7 +1640,7 @@ IMPORTANT: Base ALL content on the provided source material. Do not use generic 
       let lessonSpec = {};
       try {
         if (jsonMatch) {
-          lessonSpec = JSON.parse(jsonMatch[1].trim());
+          lessonSpec = parseAIResponse(jsonMatch[1].trim());
         }
       } catch (e) {
         console.error('Error parsing lesson JSON:', e);
@@ -1656,7 +1966,6 @@ Comprehensive lesson with proper IP attribution and hands-on activities.`;
             onChange={(e) => handleInputChange('title', e.target.value)}
             style={{ width: "100%", padding: "10px", borderRadius: "4px", border: "1px solid #ddd" }}
             placeholder="Enter your course title"
-            autocomplete="off"
             autoComplete="off"
           />
         </div>
