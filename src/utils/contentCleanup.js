@@ -123,24 +123,14 @@ export const sanitizeForDisplay = (content) => {
   sanitized = sanitized.replace(/<script[^>]*>.*?<\/script>/gi, '');
   sanitized = sanitized.replace(/javascript:/gi, '');
   
-  // STEP 3: Apply targeted content cleaning to fix specific formatting issues
+  // STEP 3: Apply minimal formatting for display (since LLM now provides clean content)
   try {
-    const { cleanCourseOutput } = require('./cleanCourseOutput');
-    
-    console.log('🔧 Applying targeted content cleaning to fix formatting issues');
-    sanitized = cleanCourseOutput(sanitized);
+    const { addMinimalFormatting } = require('./contentFormatter');
+    console.log('🎨 Applying minimal HTML formatting for display...');
+    sanitized = addMinimalFormatting(sanitized);
+    console.log('✅ Applied minimal formatting for clean display');
   } catch (error) {
-    console.warn('⚠️ Targeted content cleaning failed, continuing with basic cleanup:', error);
-  }
-  
-  // STEP 4: Apply improved visual formatting with consistent list spacing
-  try {
-    const { addProfessionalFormatting } = require('./contentFormatter');
-    // Use the new minimal formatting for consistent list spacing
-    sanitized = addProfessionalFormatting(sanitized, { isAlreadyClean: true });
-    console.log('✅ Applied improved formatting with consistent list spacing');
-  } catch (error) {
-    console.warn('⚠️ Professional formatting failed, using cleaned content:', error);
+    console.warn('⚠️ Minimal formatting failed, using basic sanitized content:', error);
   }
   
   return sanitized;

@@ -132,7 +132,7 @@ export const improveFormatting = (content) => {
  * @param {string} content - Clean Markdown content
  * @returns {string} HTML formatted content with consistent styling
  */
-const addMinimalFormatting = (content) => {
+export const addMinimalFormatting = (content) => {
   if (!content || typeof content !== 'string') return content;
   
   let formatted = content;

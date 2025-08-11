@@ -1230,15 +1230,10 @@ Do not include explanations or commentary.`;
       const rawMarkdownContent = formattingResponse.trim();
       console.log('📝 Formatted Markdown content:', rawMarkdownContent.substring(0, 200) + '...');
       
-      // Since we now have clean, formatted Markdown from the source, apply minimal processing
-      // Only apply HTML formatting for display, without altering the Markdown structure
-      const formattedContent = createProfessionalLesson(
-        rawMarkdownContent, // Use raw formatted content directly
-        lessonSpec.title || `${moduleTitle} - Lesson ${lessonNumber}`,
-        lessonSpec.learningObjectives || ['Master key concepts', 'Apply practical skills'],
-        multimediaPrefs,
-        true // Add flag to indicate content is already clean
-      );
+      // Since we now have clean, formatted Markdown from the source, use minimal HTML conversion
+      // The LLM already provided properly formatted content, so we just need basic Markdown-to-HTML
+      const { addMinimalFormatting } = require('../utils/contentFormatter');
+      const formattedContent = addMinimalFormatting(rawMarkdownContent);
       
       // Generate multimedia metadata (not content placeholders)
       const multimediaMetadata = generateMultimediaContent(multimediaPrefs, duration);
@@ -1329,11 +1324,9 @@ Do not include explanations or commentary.`;
             **Note:** Please add your specific content and learning objectives to complete this lesson.
           `;
           
-          fallbackContent = createProfessionalLesson(
-            basicContent, 
-            `${moduleTitle} - Lesson ${lessonNumber}`,
-            20
-          );
+          // Use minimal formatting for fallback content too
+          const { addMinimalFormatting } = require('../utils/contentFormatter');
+          fallbackContent = addMinimalFormatting(basicContent);
         }
         
         return {
