@@ -67,10 +67,8 @@ const useCourseStepState = (addToast) => {
       const sanitizedValue = typeof value === 'string' ? value.trim() : value;
       setQuestionAnswers(prev => ({ ...prev, [field]: sanitizedValue }));
       
-      // Real-time validation feedback
-      if (sanitizedValue.length > 0 && sanitizedValue.length < 10) {
-        showWarningToast(addToast, `${field.replace(/([A-Z])/g, ' $1').toLowerCase()} should be at least 10 characters`);
-      }
+      // Real-time validation feedback (removed restrictive 10-character minimum)
+      // Users can now enter shorter, more concise course descriptions
     } catch (error) {
       console.error('Error handling question change:', error);
       showErrorToast(addToast, 'Error updating question answer');

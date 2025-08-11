@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from "react";
+import { useNavigate } from "react-router-dom";
 import { useAuth } from "../contexts/AuthContext";
 import { db } from "../firebase";
 import { collection, addDoc, serverTimestamp } from "firebase/firestore";
@@ -34,6 +35,8 @@ import {
 
 // Import AI response parsing utilities
 import { parseAIResponse, mergeChunkResults, createAnalysisFallback } from '../utils/aiResponseParser';
+import { createEnhancedFallback, generateIntelligentFallback, extractContentInsights } from '../utils/intelligentFallback';
+import { createProfessionalLesson, generateMultimediaContent, calculateOptimalLessons } from '../utils/contentFormatter';
 
 // Add OpenAI API key at the top
 const OPENAI_API_KEY = process.env.REACT_APP_OPENAI_API_KEY;
@@ -79,6 +82,7 @@ METHOD:
 function CourseCreator() {
   const { currentUser } = useAuth();
   const { addToast } = useToast();
+  const navigate = useNavigate();
   
   // Use custom hooks
   const apiKeyHook = useApiKey(currentUser);
@@ -100,7 +104,7 @@ function CourseCreator() {
     saveApiKey,
     getCurrentApiKey,
     clearApiKeys,
-    debugApiKeys,
+
     testApiConnection,
     selectOptimalProvider,
     getApiKeyForProvider
@@ -161,6 +165,54 @@ function CourseCreator() {
   
   // Old API key management functions removed - now handled by useApiKey hook
   // Event handlers now handled by useCourseStepState hook
+  
+  // State management for module name editing
+  const [generatedModuleNames, setGeneratedModuleNames] = useState([]);
+  const [editableModuleNames, setEditableModuleNames] = useState([]);
+
+  // Function to generate module names first (before full course generation)
+  const generateModuleNamesForEditing = async () => {
+    try {
+      const sourceContent = uploadedContent || 
+        `Course Title: ${formData.title}\n` +
+        `Description: ${formData.description}\n` +
+        `Target Audience: ${formData.targetAudience}\n` +
+        `Learning Objectives: ${formData.learningObjectives}\n` +
+        `Duration: ${formData.duration}\n` +
+        `Difficulty: ${formData.difficulty}\n` +
+        `Category: ${formData.category}`;
+
+      console.log('🔍 Generating module names for editing...');
+      
+      // Step 1: Analyze content structure
+      const courseStructure = await analyzeContentStructure(sourceContent, getCurrentApiKey());
+      
+      // Step 2: Generate intelligent module names
+      const moduleNames = await generateIntelligentModuleNames(sourceContent, courseStructure, getCurrentApiKey(), questionAnswers);
+      
+      console.log('✅ Generated module names:', moduleNames);
+      
+      // Set the generated names for editing
+      setGeneratedModuleNames(moduleNames);
+      setEditableModuleNames([...moduleNames]);
+      
+      return moduleNames;
+    } catch (error) {
+      console.error('❌ Error generating module names:', error);
+      showErrorToast(addToast, 'Failed to generate module names. Please try again.');
+      
+      // Fallback to generic names
+      const fallbackNames = Array.from({ length: questionAnswers.moduleCount }, (_, i) => `Module ${i + 1}`);
+      setGeneratedModuleNames(fallbackNames);
+      setEditableModuleNames([...fallbackNames]);
+      return fallbackNames;
+    }
+  };
+
+  // Function to handle module name changes from the editor
+  const handleModuleNamesChange = (updatedNames) => {
+    setEditableModuleNames(updatedNames);
+  };
   
   // Hybrid PDF extraction function
   const extractPDFText = async (file) => {
@@ -239,66 +291,84 @@ function CourseCreator() {
   // Old file upload and content edit functions removed - now handled by custom hooks
   
   const generateCourseWithMultimedia = async () => {
-    try {
-      // Validate API key
-      const currentApiKey = getCurrentApiKey();
-      if (!currentApiKey) {
-        setShowApiKeyModal(true);
-        showErrorToast(addToast, 'Please configure your AI API key first');
+    // Immediately update UI state for responsive feedback
+    setIsGenerating(true);
+    showInfoToast(addToast, 'Preparing course generation...');
+    
+    // Use setTimeout to allow UI to update before heavy operations
+    setTimeout(async () => {
+      try {
+        // Construct source content at function scope
+        const sourceContent = uploadedContent || 
+          `Course Title: ${formData.title}\n` +
+          `Description: ${formData.description}\n` +
+          `Target Audience: ${formData.targetAudience}\n` +
+          `Learning Objectives: ${formData.learningObjectives}\n` +
+          `Duration: ${formData.duration}\n` +
+          `Difficulty: ${formData.difficulty}\n` +
+          `Category: ${formData.category}`;
+
+        // Validate API key
+        const currentApiKey = getCurrentApiKey();
+        if (!currentApiKey) {
+          setIsGenerating(false);
+          setShowApiKeyModal(true);
+          showErrorToast(addToast, 'Please configure your AI API key first');
+          return;
+        }
+        
+        // Validate API key format
+        validateApiKey(currentApiKey, apiProvider);
+        
+        // Validate all required data before generation
+        validateTextContent(sourceContent);
+        validateQuestionAnswers(questionAnswers);
+        validateMultimediaPrefs(multimediaPrefs);
+        
+        console.log('API Provider:', apiProvider);
+        console.log('API Key exists:', !!currentApiKey);
+        console.log('API Key length:', currentApiKey?.length || 0);
+        
+        showInfoToast(addToast, 'Starting course generation...');
+        
+        // Continue with the actual generation process
+        await performCourseGeneration(sourceContent, currentApiKey);
+        
+      } catch (error) {
+        setIsGenerating(false);
+        if (error instanceof ValidationError) {
+          showErrorToast(addToast, `Validation Error: ${error.message}`);
+        } else {
+          showErrorToast(addToast, 'Error preparing course generation');
+        }
         return;
       }
-      
-      // Validate API key format
-      validateApiKey(currentApiKey, apiProvider);
-      
-      // Validate all required data before generation
-      validateTextContent(uploadedContent);
-      validateQuestionAnswers(questionAnswers);
-      validateMultimediaPrefs(multimediaPrefs);
-      
-      console.log('API Provider:', apiProvider);
-      console.log('API Key exists:', !!currentApiKey);
-      console.log('API Key length:', currentApiKey?.length || 0);
-      
-      showInfoToast(addToast, 'Starting course generation...');
-    } catch (error) {
-      if (error instanceof ValidationError) {
-        showErrorToast(addToast, `Validation Error: ${error.message}`);
-      } else {
-        showErrorToast(addToast, 'Error preparing course generation');
-      }
-      return;
-    }
-    
-    setIsGenerating(true);
-    
+    }, 10); // Small delay to allow UI update
+  };
+  
+  const performCourseGeneration = async (sourceContent, currentApiKey) => {
     try {
-      const sourceContent = uploadedContent || 
-        `Course Title: ${formData.title}\n` +
-        `Description: ${formData.description}\n` +
-        `Target Audience: ${formData.targetAudience}\n` +
-        `Learning Objectives: ${formData.learningObjectives}\n` +
-        `Duration: ${formData.duration}\n` +
-        `Difficulty: ${formData.difficulty}\n` +
-        `Category: ${formData.category}`;
-      
-      // ADD THESE DEBUG LINES HERE:
+      // Source content already constructed above during validation
       console.log('Source content length:', sourceContent.length);
       console.log('Source content preview:', sourceContent.substring(0, 500));
-      console.log('Using uploaded content:', !!uploadedContent);
-      
-      console.log('Generating course with enhanced IP-preserving analysis...');
-      
-      // Step 1: Comprehensive analysis with IP preservation
+    console.log('Using uploaded content:', !!uploadedContent);
+    
+    console.log('Generating course with enhanced IP-preserving analysis...');
+    
+    // Step 1: Comprehensive analysis with IP preservation
       const courseStructure = await analyzeContentStructure(sourceContent, getCurrentApiKey());
       console.log('Enhanced course structure analysis:', courseStructure);
       
       // Display clarification questions to user (could be implemented as a modal)
       console.log('Clarification Questions for Creator:', courseStructure.clarificationQuestions);
       
-      // Step 2: Generate intelligent module names
+      // Step 2: Use edited module names if available, otherwise generate them
       let moduleNames;
-      if (questionAnswers.moduleNaming === 'custom' && questionAnswers.customModuleNames.length > 0) {
+      if (editableModuleNames.length > 0) {
+        // Use the edited module names from the editor
+        moduleNames = editableModuleNames.slice(0, questionAnswers.moduleCount);
+        console.log('✅ Using edited module names:', moduleNames);
+      } else if (questionAnswers.moduleNaming === 'custom' && questionAnswers.customModuleNames.length > 0) {
         moduleNames = questionAnswers.customModuleNames.slice(0, questionAnswers.moduleCount);
       } else {
         moduleNames = await generateIntelligentModuleNames(sourceContent, courseStructure, getCurrentApiKey(), questionAnswers);
@@ -403,7 +473,65 @@ function CourseCreator() {
       
       console.log('Generated IP-compliant comprehensive course:', course);
       setGeneratedCourse(course);
-      setStep(5);
+      
+      // Auto-save the course after successful generation
+      console.log('🔄 Auto-saving course after generation...');
+      showInfoToast(addToast, "Course generated successfully! Auto-saving...");
+      
+      try {
+        // Validate user authentication
+        if (!currentUser) {
+          throw new Error('User not authenticated');
+        }
+        
+        // Clean up the course data to ensure Firestore compatibility
+        const cleanCourseData = sanitizeForFirestore(course);
+        
+        console.log('📝 Auto-saving course to Firestore...', {
+          title: cleanCourseData.title,
+          moduleCount: cleanCourseData.modules?.length || 0,
+          userId: currentUser.uid
+        });
+        
+        const docRef = await addDoc(collection(db, "courses"), {
+          ...cleanCourseData,
+          createdBy: currentUser.uid,
+          createdAt: serverTimestamp(),
+          isPublic: false,
+          version: '1.0',
+          lastModified: serverTimestamp(),
+          autoSaved: true
+        });
+        
+        console.log('✅ Course auto-saved successfully with ID:', docRef.id);
+        showSuccessToast(addToast, "Course auto-saved successfully! Redirecting to dashboard...");
+        
+        // Redirect to dashboard after successful autosave
+        setTimeout(() => {
+          navigate('/dashboard');
+        }, 2000); // 2 second delay to show success message
+        
+      } catch (autoSaveError) {
+        console.error("❌ Auto-save failed:", autoSaveError);
+        
+        // Handle autosave errors gracefully
+        let errorMessage = "Auto-save failed. ";
+        
+        if (autoSaveError.code === 'permission-denied') {
+          errorMessage += "Permission denied. Please check your account permissions.";
+        } else if (autoSaveError.code === 'unavailable') {
+          errorMessage += "Database temporarily unavailable. Please try saving manually.";
+        } else if (autoSaveError.message.includes('not authenticated')) {
+          errorMessage += "Authentication expired. Please log in again.";
+        } else {
+          errorMessage += "Please save manually from the preview page.";
+        }
+        
+        showErrorToast(addToast, errorMessage);
+        
+        // Still proceed to preview page so user can manually save
+        setStep(5);
+      }
       
     } catch (error) {
       console.error("Enhanced course generation failed:", error);
@@ -676,17 +804,26 @@ PRODUCE a comprehensive JSON analysis with:
             return 'AI service rate limit exceeded. Please try again in a few minutes.';
           case 'SERVER_ERROR':
             return 'AI service is temporarily unavailable. Please try again later.';
+          case 'CONNECTION_REFUSED':
+            return 'Unable to connect to AI service. Please check your internet connection and try again.';
           case 'NETWORK_ERROR':
             return 'Network connection issue. Please check your internet connection.';
+          case 'TIMEOUT_ERROR':
+            return 'AI service request timed out. Please try again.';
+          case 'CORS_ERROR':
+            return 'Browser security restriction detected. Please refresh and try again.';
           default:
             return 'AI processing temporarily unavailable.';
         }
       };
       
       const userMessage = getUserFriendlyMessage(errorDetails);
-      alert(`⚠️ Content Analysis Issue\n\n${userMessage}\n\nUsing fallback analysis based on your course information.`);
       
-      return createAnalysisFallback(error, error.message);
+      // Use enhanced fallback instead of basic fallback
+      console.log('🔄 Using enhanced fallback content generation...');
+      showInfoToast(addToast, 'AI unavailable - generating course from your content directly');
+      
+      return createEnhancedFallback(sourceContent, formData, questionAnswers, errorDetails);
     }
   };
   
@@ -770,16 +907,24 @@ PRODUCE a comprehensive JSON analysis with:
       const optimalProvider = selectOptimalProvider('lessonCount', sourceContent.length);
       const optimalApiKey = getApiKeyForProvider(optimalProvider);
       
-      console.log(`🔍 Determining lesson count with ${optimalProvider}`);
+      console.log(`🔍 Determining lesson count for "${moduleName}" with ${optimalProvider}`);
       console.log(`🔑 API Key status for ${optimalProvider}: ${optimalApiKey ? 'Available' : 'Missing'}`);
       
-      const prompt = `For the module "${moduleName}" based on this content:\n\n${sourceContent}\n\nDetermine the optimal number of lessons (between 2-8) needed to thoroughly cover this module. Consider:\n- Content complexity\n- Learning objectives\n- Student comprehension\n\nReturn ONLY a single number.`;
+      const prompt = `For the module "${moduleName}" based on this content:\n\n${sourceContent.substring(0, 1500)}\n\nDetermine the optimal number of lessons (between 2-8) needed to thoroughly cover this module. Consider:\n- Content complexity\n- Learning objectives\n- Student comprehension\n\nReturn ONLY a single number.`;
       
       const response = await makeAIRequest([{ role: 'user', content: prompt }], optimalApiKey, getTokenLimit('lessonCount'), 0.3, optimalProvider);
-      const lessonCount = parseInt(response);
+      const lessonCount = parseInt(response.trim());
+      
+      console.log(`🎯 AI suggested lesson count for "${moduleName}": ${lessonCount}`);
       
       // Validate and constrain the result
-      return (lessonCount >= 2 && lessonCount <= 8) ? lessonCount : 4;
+      if (lessonCount >= 2 && lessonCount <= 8) {
+        console.log(`✅ Using AI-determined lesson count: ${lessonCount}`);
+        return lessonCount;
+      } else {
+        console.warn(`⚠️ AI returned invalid lesson count (${lessonCount}), using content-based fallback`);
+        return 4;
+      }
       
     } catch (error) {
       console.error('Error determining lesson count:', error);
@@ -809,7 +954,24 @@ PRODUCE a comprehensive JSON analysis with:
         console.warn(`Lesson count optimization failed: ${userMessage}`);
       }
       
-      return 4; // Default fallback
+      // Use content-based calculation as fallback instead of hardcoded default
+      // Calculate based on module-specific content size
+      const moduleContentSize = sourceContent.length;
+      const wordCount = sourceContent.split(/\s+/).length;
+      
+      let contentBasedLessonCount;
+      if (wordCount < 300) {
+        contentBasedLessonCount = 2; // Small module content
+      } else if (wordCount < 800) {
+        contentBasedLessonCount = 3; // Medium module content
+      } else if (wordCount < 1500) {
+        contentBasedLessonCount = 4; // Large module content
+      } else {
+        contentBasedLessonCount = Math.min(6, Math.ceil(wordCount / 400)); // Very large content
+      }
+      
+      console.log(`📊 Content-based lesson count for "${moduleName}": ${contentBasedLessonCount} lessons (${wordCount} words)`);
+      return contentBasedLessonCount;
     }
   };
   
@@ -869,99 +1031,218 @@ PRODUCE a comprehensive JSON analysis with:
       const duration = Math.floor(Math.random() * 25) + 15; // 15-40 minutes
       const systemPrompt = createSystemPrompt(sourceContent, formData, questionAnswers);
       
-      const lessonPrompt = `${systemPrompt}
+      // STEP 1: Generate lesson content structure
+      // Create unique content segments for each lesson to avoid repetition
+      const sourceLength = sourceContent.length;
+      const segmentSize = Math.max(1500, Math.floor(sourceLength / totalLessons));
+      const startIndex = (lessonNumber - 1) * segmentSize;
+      const endIndex = Math.min(startIndex + segmentSize + 500, sourceLength); // Overlap for context
+      const lessonSpecificContent = sourceContent.substring(startIndex, endIndex);
+      
+      const contentPrompt = `Create comprehensive lesson content for "${moduleTitle}" - Lesson ${lessonNumber} of ${totalLessons}.
 
-CREATE LESSON ${lessonNumber} of ${totalLessons} for module "${moduleTitle}"
+IMPORTANT: This lesson should focus on UNIQUE aspects of the module. Each lesson must be distinct and progressive.
 
-SOURCE MATERIAL:
-${sourceContent}
+SOURCE MATERIAL FOR THIS LESSON:
+${lessonSpecificContent}
 
-COURSE ANALYSIS:
-${JSON.stringify(courseStructure.sourceAnalysis, null, 2)}
+FULL MODULE CONTEXT (for reference):
+Module: ${moduleTitle}
+Lesson Position: ${lessonNumber} of ${totalLessons}
+Previous lessons should have covered earlier concepts, this lesson should build upon them.
 
 LESSON REQUIREMENTS:
 - Duration: ${duration} minutes
 - Hands-on ratio: ${questionAnswers.interactivityLevel === 'high' ? '70%' : '50%'}
 - Assessment style: ${questionAnswers.assessmentType}
 - Learning style: ${questionAnswers.learningStyle}
+- MUST be unique from other lessons in this module
+- Should progressively build on concepts from previous lessons
 
-DESIGN PATTERN: concept → guided demo → hands-on task → reflection/feedback
+Return ONLY a valid JSON object with this exact structure:
 
-PRODUCE BOTH:
-
-1. JSON LESSON SPEC:
 {
   "lessonId": "lesson-${lessonNumber}",
-  "title": "specific title from source material",
+  "title": "Specific lesson title based on source material",
   "duration": ${duration},
   "learningObjectives": [
-    "objective1 (tied to source)",
-    "objective2 (tied to source)",
-    "objective3 (tied to source)"
+    "Specific objective 1 from source material",
+    "Specific objective 2 from source material", 
+    "Specific objective 3 from source material"
   ],
   "contentBlocks": [
     {
       "type": "concept",
-      "content": "core concept from source",
-      "sourceReference": "specific citation",
-      "duration": minutes
+      "content": "Detailed explanation of core concept from source material (200+ words)",
+      "sourceReference": "Specific citation from source",
+      "duration": 8
     },
     {
-      "type": "guidedDemo",
-      "content": "step-by-step demonstration",
-      "assets": ["asset1", "asset2"],
-      "duration": minutes
+      "type": "guidedDemo", 
+      "content": "Step-by-step demonstration with detailed instructions (300+ words)",
+      "assets": ["Demo worksheet", "Example template"],
+      "duration": 12
     },
     {
       "type": "handsOn",
-      "content": "practical exercise from source",
-      "deliverable": "what learner creates",
-      "duration": minutes
+      "content": "Practical hands-on exercise with clear instructions (250+ words)",
+      "deliverable": "Specific deliverable learner will create",
+      "duration": 15
     },
     {
       "type": "reflection",
-      "content": "reflection questions",
-      "duration": minutes
+      "content": "Reflection questions and discussion points (150+ words)",
+      "duration": 5
     }
   ],
   "assessments": {
-    "formative": "quick check tied to source",
-    "summative": "comprehensive assessment"
+    "formative": "Quick knowledge check questions",
+    "summative": "Comprehensive assessment task"
   },
   "assets": {
-    "worksheets": ["worksheet1", "worksheet2"],
-    "templates": ["template1"],
-    "resources": ["resource1"]
-  },
-  "ipAttribution": {
-    "sourceReferences": ["specific citations"],
-    "authorCredits": "proper attribution",
-    "llmAugmented": ["areas where AI added content"]
+    "worksheets": ["Lesson ${lessonNumber} Worksheet", "Practice Template"],
+    "templates": ["${moduleTitle} Template"],
+    "resources": ["Reference Guide", "Additional Reading"]
   }
 }
 
-2. MARKDOWN LESSON DRAFT:
-[Detailed lesson content in markdown format using the source material]
-
-IMPORTANT: Base ALL content on the provided source material. Do not use generic content.`;
+IMPORTANT: 
+- Base ALL content on the provided source material
+- Make content blocks detailed and substantial (not just summaries)
+- Ensure JSON is valid and properly formatted
+- Do NOT include markdownContent in this response`;
       
-      const aiResponse = await makeAIRequest([{ role: 'user', content: lessonPrompt }], optimalApiKey, getTokenLimit('lessonGeneration'), 0.7, optimalProvider);
+      const aiResponse = await makeAIRequest([{ role: 'user', content: contentPrompt }], optimalApiKey, getTokenLimit('lessonGeneration'), 0.7, optimalProvider);
       
-      // Parse JSON and Markdown sections
-      const jsonMatch = aiResponse.match(/1\. JSON LESSON SPEC:([\s\S]*?)(?=2\. MARKDOWN LESSON DRAFT:)/);
-      const markdownMatch = aiResponse.match(/2\. MARKDOWN LESSON DRAFT:([\s\S]*?)$/);
+      // Parse the JSON response directly (no more complex parsing needed)
+      console.log(`📝 Raw AI response length: ${aiResponse.length} characters`);
+      console.log(`📝 Response preview: ${aiResponse.substring(0, 200)}...`);
       
       let lessonSpec = {};
       try {
-        if (jsonMatch) {
-          lessonSpec = parseAIResponse(jsonMatch[1].trim());
-        }
+        // Try to parse the entire response as JSON first
+        lessonSpec = parseAIResponse(aiResponse.trim());
+        console.log(`✅ Successfully parsed lesson JSON for ${moduleTitle} - Lesson ${lessonNumber}`);
       } catch (e) {
-        console.error('Error parsing lesson JSON:', e);
+        console.error('❌ Error parsing lesson JSON:', e);
+        console.error('❌ Raw response that failed:', aiResponse.substring(0, 500));
+        
+        // Fallback: try to extract JSON from response
+        try {
+          const jsonStart = aiResponse.indexOf('{');
+          const jsonEnd = aiResponse.lastIndexOf('}') + 1;
+          if (jsonStart !== -1 && jsonEnd > jsonStart) {
+            const jsonStr = aiResponse.substring(jsonStart, jsonEnd);
+            lessonSpec = parseAIResponse(jsonStr);
+            console.log(`✅ Successfully extracted and parsed JSON from response`);
+          }
+        } catch (fallbackError) {
+          console.error('❌ Fallback JSON extraction also failed:', fallbackError);
+        }
       }
       
-      const markdownContent = markdownMatch ? markdownMatch[1].trim() : 
-        `# ${moduleTitle} - Lesson ${lessonNumber}\n\nComprehensive lesson content with hands-on activities.`;
+      // STEP 2: Generate properly formatted Markdown content using enhanced formatting prompt with self-check
+      const formattingPrompt = `You are a world-class instructional designer. 
+Generate a complete lesson in STRICT Markdown for immediate web rendering.
+
+LESSON CONTENT TO FORMAT:
+Title: ${lessonSpec.title || `${moduleTitle} - Lesson ${lessonNumber}`}
+Learning Objectives: ${JSON.stringify(lessonSpec.learningObjectives || ['Master key concepts', 'Apply practical skills'])}
+Content Blocks: ${JSON.stringify(lessonSpec.contentBlocks || [])}
+
+MARKDOWN FORMAT RULES:
+1. # = Lesson Title
+2. ## = Section Title
+3. Headings are followed by EXACTLY one blank line, then content text.
+4. No more than one blank line between any two blocks of text.
+5. Use **bold** for key terms, numbered lists for steps, and '-' for bullet points.
+6. Each lesson must have these sections in this order, each with its own heading exactly as shown:
+   - **Learning Objectives** (bulleted list)
+   - **Content** (paragraphs ≤4 sentences each)
+   - **Activity** (1 interactive task)
+   - **Reflection** (1–3 reflection questions or prompts)
+7. No empty headings.
+8. No placeholder text (e.g., "Duration: minutes").
+9. Text must be left-aligned with no extra indentation.
+10. Do not center text or add decorative symbols.
+11. Keep paragraphs ≤4 sentences for readability.
+
+LIST FORMAT RULES (CRITICAL):
+- ALL bullet points must start with a dash followed by a space: "- ".
+- Do NOT use "•", "*", or any other bullet symbols.
+- All items in a list must use the same marker.
+- No extra indentation before list markers.
+- Each bullet point starts at the beginning of the line.
+- Consistent spacing: one space after the dash, then content.
+
+FEW-SHOT EXAMPLE:
+
+# Texting Fundamentals: Crafting Engaging Opening Lines
+
+## Learning Objectives
+
+- Understand the concept of **response bait** in texting
+- Learn how to use curiosity, humor, or surprise to prompt replies
+- Identify when and how to tailor a message to the recipient
+
+## Content
+
+**Response bait** is the practice of crafting a message that feels too intriguing to ignore.
+It can include humor, cultural references, or thought-provoking questions.
+The goal is to make the recipient curious enough to reply immediately.
+
+For example, instead of asking, "How was your weekend?" you might text:
+*"If your weekend was a movie, what genre would it be?"*
+This opens the door for creativity and a more memorable exchange.
+
+## Activity
+
+Write 3 opening texts using response bait:
+1 for a friend, 1 for a potential romantic interest, and 1 for a colleague.
+Aim for curiosity and personalization.
+
+## Reflection
+
+- Which of your opening lines is most likely to get a reply?
+- How could you adjust it for a different audience?
+
+SELF-CHECK BEFORE OUTPUT:
+Review your generated lesson and confirm that:
+- All headings have exactly one blank line after them.
+- There are no more than one blank line between any blocks.
+- Each lesson has all four required sections with correct headings.
+- Paragraphs are ≤4 sentences.
+- No placeholder text or empty headings are present.
+- Text is left-aligned with no decorative symbols or centered content.
+- ALL bullet points use "- " (dash + space) format - NO "•", "*", or other symbols.
+- All list items have consistent formatting with no extra indentation.
+
+If any rule is broken, fix it before returning the output.
+
+OUTPUT INSTRUCTIONS:
+Return only the final, fully formatted Markdown.
+Do not include explanations or commentary.`;
+
+      console.log('🎨 Generating formatted Markdown with dedicated formatting prompt...');
+      const formattingResponse = await makeAIRequest([{ role: 'user', content: formattingPrompt }], optimalApiKey, getTokenLimit('lessonGeneration'), 0.3, optimalProvider);
+      
+      // Use the formatted response as our markdown content
+      const rawMarkdownContent = formattingResponse.trim();
+      console.log('📝 Formatted Markdown content:', rawMarkdownContent.substring(0, 200) + '...');
+      
+      // Since we now have clean, formatted Markdown from the source, apply minimal processing
+      // Only apply HTML formatting for display, without altering the Markdown structure
+      const formattedContent = createProfessionalLesson(
+        rawMarkdownContent, // Use raw formatted content directly
+        lessonSpec.title || `${moduleTitle} - Lesson ${lessonNumber}`,
+        lessonSpec.learningObjectives || ['Master key concepts', 'Apply practical skills'],
+        multimediaPrefs,
+        true // Add flag to indicate content is already clean
+      );
+      
+      // Generate multimedia metadata (not content placeholders)
+      const multimediaMetadata = generateMultimediaContent(multimediaPrefs, duration);
+      const finalContent = formattedContent;
       
       return {
         id: lessonSpec.lessonId || `lesson-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
@@ -972,7 +1253,7 @@ IMPORTANT: Base ALL content on the provided source material. Do not use generic 
         assessments: lessonSpec.assessments || {},
         assets: lessonSpec.assets || {},
         ipAttribution: lessonSpec.ipAttribution || {},
-        markdownContent: markdownContent,
+        markdownContent: finalContent,
         isEditable: true,
         multimedia: {
           hasAudio: multimediaPrefs.includeAudio,
@@ -1012,57 +1293,48 @@ IMPORTANT: Base ALL content on the provided source material. Do not use generic 
         
         const userMessage = getUserFriendlyMessage(errorDetails);
         
-        // IMPROVED FALLBACK: Use actual source content with detailed error info
-        const fallbackContent = sourceContent ? 
-          `# ${moduleTitle} - Lesson ${lessonNumber}
+        // ENHANCED INTELLIGENT FALLBACK: Generate meaningful content from source material
+        const insights = extractContentInsights(sourceContent);
+        let fallbackContent;
+        
+        if (sourceContent) {
+          // Generate intelligent fallback with professional formatting
+          fallbackContent = generateIntelligentFallback(sourceContent, insights, moduleTitle, lessonNumber);
+          
+          // Store multimedia metadata for UI layer (not content injection)
+          if (multimediaPrefs && (multimediaPrefs.includeAudio || multimediaPrefs.includeVideo)) {
+            const multimediaMetadata = generateMultimediaContent(multimediaPrefs, `${moduleTitle} - Lesson ${lessonNumber}`);
+            // Multimedia will be handled by UI components, not injected into content
+          }
+        } else {
+          // Basic fallback when no source content
+          const basicContent = `
+            ## ⚠️ AI Processing Status
+            **${userMessage}**
 
-## ⚠️ AI Processing Status
-**${userMessage}**
+            ${errorDetails.canRetry ? 
+              '🔄 This lesson can be regenerated when AI service is restored.' : 
+              '📝 Please customize this content based on your specific learning objectives.'}
 
-*This lesson was generated from your uploaded content when AI processing was unavailable.*
+            ## Learning Framework
 
----
+            This lesson follows a structured approach:
 
-## Content from Source Material
+            1. **Introduction**: Core concepts and objectives
+            2. **Content Delivery**: Key information and examples  
+            3. **Practice Activities**: Hands-on exercises
+            4. **Assessment**: Knowledge checks and reflection
+            5. **Application**: Real-world connections
 
-${sourceContent.substring(0, 1500)}${sourceContent.length > 1500 ? '...' : ''}
-
-## Learning Activities
-
-Based on the source material above, complete the following activities:
-
-1. **Concept Review**: Identify and summarize the key concepts presented in the source material
-2. **Practical Application**: Think of real-world scenarios where these concepts would apply
-3. **Critical Analysis**: What questions does this material raise? What additional information might be needed?
-4. **Knowledge Check**: Create 3 questions based on the content to test understanding
-
-## Discussion Points
-- How does this content relate to your current knowledge or experience?
-- What aspects would you like to explore further?
-- How might you apply these concepts in practice?
-
-## Next Steps
-${errorDetails.canRetry ? 
-  '🔄 **Retry Available**: This lesson can be regenerated when AI service is restored.' : 
-  '📝 **Manual Edit**: Please customize this content based on your specific learning objectives.'}
-
----
-*Note: This lesson was generated from your uploaded content when AI processing was unavailable.*` :
-          `# ${moduleTitle} - Lesson ${lessonNumber}\n\n## ⚠️ AI Processing Status\n**${userMessage}**\n\n${errorDetails.canRetry ? 
-            '🔄 This lesson can be regenerated when AI service is restored.' : 
-            '📝 Please customize this content based on your specific learning objectives.'}
-
-## Learning Framework
-
-This lesson follows a structured approach:
-
-1. **Introduction**: Core concepts and objectives
-2. **Content Delivery**: Key information and examples  
-3. **Practice Activities**: Hands-on exercises
-4. **Assessment**: Knowledge checks and reflection
-5. **Application**: Real-world connections
-
-Comprehensive lesson with proper IP attribution and hands-on activities.`;
+            **Note:** Please add your specific content and learning objectives to complete this lesson.
+          `;
+          
+          fallbackContent = createProfessionalLesson(
+            basicContent, 
+            `${moduleTitle} - Lesson ${lessonNumber}`,
+            20
+          );
+        }
         
         return {
           id: `lesson-fallback-${lessonNumber}`,
@@ -1082,14 +1354,32 @@ Comprehensive lesson with proper IP attribution and hands-on activities.`;
             timestamp: errorDetails.timestamp,
             canRetry: ['RATE_LIMIT', 'SERVER_ERROR', 'NETWORK_ERROR'].includes(errorDetails.errorType)
           },
-          multimedia: { hasAudio: false, hasVideo: false, audioUrl: null, videoUrl: null, audioDescription: null, videoDescription: null }
+          multimedia: { 
+            hasAudio: multimediaPrefs?.includeAudio || false, 
+            hasVideo: multimediaPrefs?.includeVideo || false, 
+            audioUrl: null, 
+            videoUrl: null, 
+            audioDescription: multimediaPrefs?.includeAudio ? `Audio narration for ${moduleTitle} - Lesson ${lessonNumber}` : null, 
+            videoDescription: multimediaPrefs?.includeVideo ? `Video content for ${moduleTitle} - Lesson ${lessonNumber}` : null 
+          }
         };
       }
   };
   
-  // Save course function
+  // Enhanced save course function with better error handling
   const saveCourse = async () => {
     try {
+      // Validation checks
+      if (!currentUser) {
+        throw new Error('User not authenticated');
+      }
+      
+      if (!generatedCourse) {
+        throw new Error('No course data to save');
+      }
+      
+      console.log('🔄 Preparing course data for save...');
+      
       // Apply any edited content
       const finalCourse = { ...generatedCourse };
       Object.keys(editingContent).forEach(key => {
@@ -1099,32 +1389,87 @@ Comprehensive lesson with proper IP attribution and hands-on activities.`;
         }
       });
       
-      await addDoc(collection(db, "courses"), {
-        ...finalCourse,
-        createdBy: currentUser.uid,
-        createdAt: serverTimestamp(),
-        isPublic: false
+      // Clean up the course data to ensure Firestore compatibility
+      const cleanCourseData = sanitizeForFirestore(finalCourse);
+      
+      console.log('📝 Saving course to Firestore...', {
+        title: cleanCourseData.title,
+        moduleCount: cleanCourseData.modules?.length || 0,
+        userId: currentUser.uid
       });
       
-      alert("Course saved successfully!");
-      // Reset form
-      setStep(1);
-      setGeneratedCourse(null);
-      setEditingContent({});
-      setFormData({
-        title: "",
-        description: "",
-        targetAudience: "",
-        learningObjectives: "",
-        duration: "",
-        difficulty: "beginner",
-        category: "",
-        additionalRequirements: "",
+      const docRef = await addDoc(collection(db, "courses"), {
+        ...cleanCourseData,
+        createdBy: currentUser.uid,
+        createdAt: serverTimestamp(),
+        isPublic: false,
+        version: '1.0',
+        lastModified: serverTimestamp()
       });
+      
+      console.log('✅ Course saved successfully with ID:', docRef.id);
+      showSuccessToast(addToast, "Course saved successfully!");
+      
+      // Redirect to dashboard after successful save
+      navigate('/dashboard');
     } catch (error) {
-      console.error("Error saving course:", error);
-      alert("Failed to save course. Please try again.");
+      console.error("❌ Error saving course:", error);
+      
+      // Enhanced error reporting
+      let errorMessage = "Failed to save course. ";
+      
+      if (error.code === 'permission-denied') {
+        errorMessage += "Permission denied. Please check your authentication.";
+      } else if (error.code === 'unavailable') {
+        errorMessage += "Database temporarily unavailable. Please try again.";
+      } else if (error.message.includes('User not authenticated')) {
+        errorMessage += "Please log in and try again.";
+      } else if (error.message.includes('No course data')) {
+        errorMessage += "No course data found. Please generate a course first.";
+      } else {
+        errorMessage += `Error: ${error.message}`;
+      }
+      
+      showErrorToast(addToast, errorMessage);
+      console.error("Full error details:", {
+        code: error.code,
+        message: error.message,
+        stack: error.stack
+      });
     }
+  };
+  
+  // Helper function to sanitize data for Firestore
+  const sanitizeForFirestore = (data) => {
+    if (data === null || data === undefined) {
+      return null;
+    }
+    
+    if (typeof data === 'function') {
+      return null; // Remove functions
+    }
+    
+    if (data instanceof Date) {
+      return data; // Firestore handles dates
+    }
+    
+    if (Array.isArray(data)) {
+      return data.map(item => sanitizeForFirestore(item)).filter(item => item !== null);
+    }
+    
+    if (typeof data === 'object') {
+      const sanitized = {};
+      Object.keys(data).forEach(key => {
+        // Skip undefined values and functions
+        if (data[key] !== undefined && typeof data[key] !== 'function') {
+          const cleanKey = key.replace(/[.#$[\]]/g, '_'); // Replace invalid Firestore field characters
+          sanitized[cleanKey] = sanitizeForFirestore(data[key]);
+        }
+      });
+      return sanitized;
+    }
+    
+    return data; // Primitive values
   };
   
   // Old renderApiKeyModal function removed - now using ApiKeyManager component
@@ -1164,26 +1509,7 @@ Comprehensive lesson with proper IP attribution and hands-on activities.`;
           >
             🔑 API Keys
           </button>
-          <button
-            onClick={() => {
-              console.log('🔧 MANUAL DEBUG TEST');
-              debugApiKeys();
-              testApiConnection();
-            }}
-            style={{
-              backgroundColor: "#e74c3c",
-              color: "white",
-              border: "none",
-              padding: "8px 16px",
-              borderRadius: "6px",
-              cursor: "pointer",
-              fontSize: "14px",
-              fontWeight: "bold"
-            }}
-            title="Debug API Keys (Check Console)"
-          >
-            🐛 Debug
-          </button>
+
         </div>
         <div style={{ display: "flex", justifyContent: "center", gap: "10px", marginTop: "20px" }}>
           {[1, 2, 3, 4, 5].map(stepNum => (
@@ -1267,8 +1593,10 @@ Comprehensive lesson with proper IP attribution and hands-on activities.`;
             isGenerating={isGenerating}
             questionAnswers={questionAnswers}
             multimediaPrefs={multimediaPrefs}
-            onGenerate={generateCourseWithMultimedia}
+            onGenerate={generatedModuleNames.length === 0 ? generateModuleNamesForEditing : generateCourseWithMultimedia}
             onBack={() => setStep(3)}
+            generatedModuleNames={generatedModuleNames}
+            onModuleNamesChange={handleModuleNamesChange}
           />
         </ErrorBoundary>
       )}

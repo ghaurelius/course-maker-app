@@ -1,4 +1,22 @@
-import React from 'react';
+import React, { useState } from 'react';
+
+// Simple markdown to HTML converter for lesson content
+const renderMarkdown = (markdown) => {
+  if (!markdown) return '';
+  
+  return markdown
+    // Convert headers
+    .replace(/^### (.*$)/gm, '<h3 style="margin: 15px 0 10px 0; color: #333; font-size: 16px;">$1</h3>')
+    .replace(/^## (.*$)/gm, '<h2 style="margin: 20px 0 15px 0; color: #333; font-size: 18px;">$1</h2>')
+    .replace(/^# (.*$)/gm, '<h1 style="margin: 25px 0 20px 0; color: #333; font-size: 20px;">$1</h1>')
+    // Convert bullet points
+    .replace(/^- (.*$)/gm, '<li style="margin: 5px 0;">$1</li>')
+    // Wrap consecutive list items in ul tags
+    .replace(/(<li.*<\/li>\s*)+/g, '<ul style="margin: 10px 0; padding-left: 20px;">$&</ul>')
+    // Convert line breaks
+    .replace(/\n\n/g, '<br><br>')
+    .replace(/\n/g, '<br>');
+};
 
 const CoursePreview = ({ 
   generatedCourse, 
@@ -76,21 +94,46 @@ const CoursePreview = ({
                     )}
                   </div>
                   
-                  <textarea
-                    value={editingContent[`${moduleIndex}-${lessonIndex}`] || lesson.markdownContent || lesson.content || ''}
-                    onChange={(e) => handleContentEdit(moduleIndex, lessonIndex, e.target.value)}
+                  {/* Rendered lesson content */}
+                  <div
                     style={{
                       width: "100%",
                       minHeight: "150px",
-                      padding: "10px",
+                      padding: "15px",
                       borderRadius: "4px",
                       border: "1px solid #ddd",
-                      fontSize: "12px",
-                      fontFamily: "monospace",
-                      resize: "vertical"
+                      fontSize: "13px",
+                      fontFamily: "Arial, sans-serif",
+                      backgroundColor: "#fff",
+                      lineHeight: "1.6"
                     }}
-                    placeholder="Lesson content will appear here..."
+                    dangerouslySetInnerHTML={{
+                      __html: renderMarkdown(editingContent[`${moduleIndex}-${lessonIndex}`] || lesson.markdownContent || lesson.content || 'Lesson content will appear here...')
+                    }}
                   />
+                  
+                  {/* Edit button for raw markdown editing */}
+                  <button
+                    onClick={() => {
+                      const rawContent = editingContent[`${moduleIndex}-${lessonIndex}`] || lesson.markdownContent || lesson.content || '';
+                      const newContent = prompt('Edit lesson content (Markdown):', rawContent);
+                      if (newContent !== null) {
+                        handleContentEdit(moduleIndex, lessonIndex, newContent);
+                      }
+                    }}
+                    style={{
+                      marginTop: "8px",
+                      padding: "4px 8px",
+                      fontSize: "11px",
+                      backgroundColor: "#007bff",
+                      color: "white",
+                      border: "none",
+                      borderRadius: "3px",
+                      cursor: "pointer"
+                    }}
+                  >
+                    Edit Content
+                  </button>
                   
                   {/* Lesson metadata */}
                   {lesson.type && (

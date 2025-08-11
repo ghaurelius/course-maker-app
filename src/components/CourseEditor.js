@@ -3,6 +3,7 @@ import { useParams, useNavigate } from "react-router-dom";
 import { doc, getDoc, updateDoc } from "firebase/firestore";
 import { db } from "../firebase";
 import { useAuth } from "../contexts/AuthContext";
+import VideoUpload from "./VideoUpload";
 
 const CourseEditor = () => {
   const { courseId } = useParams();
@@ -147,6 +148,32 @@ const CourseEditor = () => {
     const updatedModules = [...modules];
     updatedModules[moduleIndex].lessons[lessonIndex][field] = value;
     setModules(updatedModules);
+  };
+
+  // Handle video upload for lessons
+  const handleVideoUpload = async (videoUrl, moduleIndex, lessonIndex) => {
+    try {
+      const updatedModules = [...modules];
+      if (updatedModules[moduleIndex] && updatedModules[moduleIndex].lessons[lessonIndex]) {
+        updatedModules[moduleIndex].lessons[lessonIndex].videoUrl = videoUrl;
+        setModules(updatedModules);
+        
+        // Also update the course in Firestore immediately
+        const updatedCourse = {
+          ...course,
+          modules: updatedModules,
+          updatedAt: new Date(),
+        };
+        
+        await updateDoc(doc(db, "courses", courseId), updatedCourse);
+        setCourse(updatedCourse);
+        
+        console.log('Video uploaded and saved successfully');
+      }
+    } catch (error) {
+      console.error('Error saving video to course:', error);
+      alert('Failed to save video. Please try again.');
+    }
   };
 
   if (loading) {
@@ -706,6 +733,43 @@ const CourseEditor = () => {
                           placeholder="Enter lesson content here...\n\nYou can use:\n- **Bold text**\n- *Italic text*\n- # Headers\n- Lists\n- Code blocks\n- And more!"
                         />
                       </div>
+
+                      {/* Video Upload Section for Course Creators */}
+                      <div style={{ marginTop: "20px" }}>
+                        <VideoUpload
+                          lessonId={`lesson-${selectedModule}-${selectedLesson}`}
+                          moduleId={`module-${selectedModule}`}
+                          onVideoUploaded={(videoUrl) => handleVideoUpload(videoUrl, selectedModule, selectedLesson)}
+                          existingVideoUrl={modules[selectedModule]?.lessons[selectedLesson]?.videoUrl}
+                        />
+                      </div>
+
+                      {/* Display existing video preview if available */}
+                      {modules[selectedModule]?.lessons[selectedLesson]?.videoUrl && (
+                        <div style={{
+                          marginTop: "15px",
+                          padding: "15px",
+                          backgroundColor: "#f8f9fa",
+                          border: "1px solid #e9ecef",
+                          borderRadius: "8px"
+                        }}>
+                          <h4 style={{ margin: "0 0 10px 0", color: "#2c3e50" }}>
+                            📹 Current Lesson Video
+                          </h4>
+                          <video
+                            controls
+                            style={{
+                              width: "100%",
+                              maxWidth: "400px",
+                              height: "auto",
+                              borderRadius: "4px"
+                            }}
+                          >
+                            <source src={modules[selectedModule].lessons[selectedLesson].videoUrl} type="video/mp4" />
+                            Your browser does not support the video tag.
+                          </video>
+                        </div>
+                      )}
                     </div>
                   )}
               </div>

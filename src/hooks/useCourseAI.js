@@ -225,37 +225,67 @@ const useCourseAI = (apiKeyHook, courseGenerationHook, addToast) => {
         try {
           errorDetails = JSON.parse(error.message);
         } catch (e) {
+          // Enhanced error detection for connection issues
+          const errorMessage = error.message || '';
+          let errorType = 'NETWORK_ERROR';
+          
+          if (errorMessage.includes('ERR_CONNECTION_REFUSED') || errorMessage.includes('ECONNREFUSED')) {
+            errorType = 'CONNECTION_REFUSED';
+          } else if (errorMessage.includes('ERR_NETWORK') || errorMessage.includes('Failed to fetch')) {
+            errorType = 'NETWORK_ERROR';
+          } else if (errorMessage.includes('timeout') || errorMessage.includes('TIMEOUT')) {
+            errorType = 'TIMEOUT_ERROR';
+          } else if (errorMessage.includes('CORS') || errorMessage.includes('Access-Control')) {
+            errorType = 'CORS_ERROR';
+          }
+          
           errorDetails = { 
-            errorType: 'NETWORK_ERROR', 
-            message: error.message || 'Network or connection error',
-            provider: currentProvider 
+            errorType, 
+            message: errorMessage || 'Network or connection error',
+            provider: currentProvider,
+            canRetry: ['CONNECTION_REFUSED', 'NETWORK_ERROR', 'TIMEOUT_ERROR'].includes(errorType),
+            timestamp: new Date().toISOString()
           };
         }
         
-        // Attempt failover if this is a retryable error
-        const retryableErrors = ['QUOTA_EXCEEDED', 'RATE_LIMIT', 'INVALID_API_KEY', 'SERVER_ERROR'];
+        // Enhanced retry logic with exponential backoff for network errors
+        const retryableErrors = ['QUOTA_EXCEEDED', 'RATE_LIMIT', 'INVALID_API_KEY', 'SERVER_ERROR', 'CONNECTION_REFUSED', 'NETWORK_ERROR', 'TIMEOUT_ERROR'];
+        const networkErrors = ['CONNECTION_REFUSED', 'NETWORK_ERROR', 'TIMEOUT_ERROR', 'CORS_ERROR'];
+        
         if (retryableErrors.includes(errorDetails.errorType) && retryCount < maxRetries) {
-          console.log(`🔄 Attempting failover due to ${errorDetails.errorType}`);
+          console.log(`🔄 Attempting retry ${retryCount + 1}/${maxRetries} due to ${errorDetails.errorType}`);
           
-          // Try to failover to the other provider
-          const fallbackProvider = handleApiFailover(currentProvider, errorDetails.errorType, errorDetails.message);
-          
-          if (fallbackProvider && fallbackProvider !== currentProvider) {
-            currentProvider = fallbackProvider;
-            currentApiKey = getApiKeyForProvider(currentProvider);
-            retryCount++;
-            continue; // Retry with new provider
+          // For network errors, wait before retrying
+          if (networkErrors.includes(errorDetails.errorType)) {
+            const backoffDelay = Math.min(1000 * Math.pow(2, retryCount), 5000); // Max 5 second delay
+            console.log(`⏳ Waiting ${backoffDelay}ms before retry due to network error`);
+            await new Promise(resolve => setTimeout(resolve, backoffDelay));
           }
+          
+          // Try to failover to the other provider for API-related errors
+          if (['QUOTA_EXCEEDED', 'RATE_LIMIT', 'INVALID_API_KEY', 'SERVER_ERROR'].includes(errorDetails.errorType)) {
+            const fallbackProvider = handleApiFailover(currentProvider, errorDetails.errorType, errorDetails.message);
+            
+            if (fallbackProvider && fallbackProvider !== currentProvider) {
+              currentProvider = fallbackProvider;
+              currentApiKey = getApiKeyForProvider(currentProvider);
+              console.log(`🔄 Switched to ${fallbackProvider} for retry`);
+            }
+          }
+          
+          retryCount++;
+          continue; // Retry with same or new provider
         }
         
-        // If we've exhausted retries or can't failover, throw the error
+        // If we've exhausted retries or can't failover, throw the enhanced error
         if (retryCount >= maxRetries) {
           console.error(`❌ All retry attempts exhausted for AI request`);
-          throw error;
+          errorDetails.retriesExhausted = true;
+          throw new Error(JSON.stringify(errorDetails));
         }
         
-        // For non-retryable errors, throw immediately
-        throw error;
+        // For non-retryable errors, throw immediately with enhanced details
+        throw new Error(JSON.stringify(errorDetails));
       }
     }
     

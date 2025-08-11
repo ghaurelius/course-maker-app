@@ -277,7 +277,7 @@ function PublicCourses() {
                       
                       {isUserEnrolled ? (
                         <button
-                          onClick={() => navigate('/enrolled-courses')}
+                          onClick={() => navigate(`/course/${course.id}`)}
                           style={{
                             flex: 1,
                             backgroundColor: '#28a745',
@@ -290,7 +290,7 @@ function PublicCourses() {
                             fontWeight: 'bold'
                           }}
                         >
-                          ✅ Enrolled
+                          🚀 Start Course
                         </button>
                       ) : (
                         <button

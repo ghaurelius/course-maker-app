@@ -110,15 +110,13 @@ export const validateFormData = (formData) => {
   // Validate course description
   if (!formData.description || formData.description.trim().length === 0) {
     errors.description = 'Course description is required';
-  } else if (formData.description.trim().length < 10) {
-    errors.description = 'Course description must be at least 10 characters long';
   } else if (formData.description.trim().length > 500) {
     errors.description = 'Course description must be less than 500 characters';
   }
   
-  // Validate target audience
+  // Set default target audience to "Beginner" if not provided
   if (!formData.targetAudience || formData.targetAudience.trim().length === 0) {
-    errors.targetAudience = 'Target audience is required';
+    formData.targetAudience = 'Beginner';
   }
   
   // Validate difficulty level

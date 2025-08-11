@@ -1,9 +1,12 @@
 import React, { useState, useEffect } from "react";
 import { useParams, useNavigate } from "react-router-dom";
-import { db } from "../firebase";
 import { doc, getDoc } from "firebase/firestore";
+import { db } from "../firebase";
 import { useAuth } from "../contexts/AuthContext";
 import { useEnrollment } from "../contexts/EnrollmentContext";
+import { sanitizeForDisplay } from "../utils/contentCleanup";
+import AudioPlayer from "./AudioPlayer";
+import TableOfContents from "./TableOfContents";
 
 function CourseViewer() {
   const { courseId } = useParams();
@@ -18,6 +21,8 @@ function CourseViewer() {
   const [currentLessonIndex, setCurrentLessonIndex] = useState(0);
   const [enrollment, setEnrollment] = useState(null);
   const [completedLessons, setCompletedLessons] = useState([]);
+  const [showTableOfContents, setShowTableOfContents] = useState(false);
+  const [isCreatorMode, setIsCreatorMode] = useState(false);
 
   useEffect(() => {
     const fetchCourse = async () => {
@@ -54,6 +59,26 @@ function CourseViewer() {
 
     fetchCourse();
   }, [courseId, currentUser, getEnrollmentDetails]); // Added getEnrollmentDetails
+
+  // Check if current user is the course creator
+  useEffect(() => {
+    if (course && currentUser) {
+      setIsCreatorMode(course.createdBy === currentUser.uid);
+    }
+  }, [course, currentUser]);
+
+  // Handle navigation from table of contents
+  const handleTOCNavigation = (moduleIndex, lessonIndex = null) => {
+    setCurrentModuleIndex(moduleIndex);
+    if (lessonIndex !== null) {
+      setCurrentLessonIndex(lessonIndex);
+    } else {
+      setCurrentLessonIndex(0);
+    }
+    setShowTableOfContents(false); // Close TOC after navigation
+  };
+
+  // Video upload functionality moved to CourseEditor component
 
   const handleLessonComplete = async (moduleIndex, lessonIndex) => {
     if (!currentUser || !enrollment) {
@@ -136,8 +161,19 @@ function CourseViewer() {
     );
   }
 
-  const currentModule = course.modules[currentModuleIndex];
-  const currentLesson = currentModule?.lessons[currentLessonIndex];
+  const currentModule = course.modules?.[currentModuleIndex];
+  const currentLesson = currentModule?.lessons?.[currentLessonIndex];
+
+  // Safety check for course data integrity
+  if (course && (!course.modules || course.modules.length === 0)) {
+    return (
+      <div style={{ padding: "20px", textAlign: "center" }}>
+        <h2>Course Data Error</h2>
+        <p>This course appears to have no modules or lessons. Please contact support.</p>
+        <button onClick={() => navigate("/dashboard")}>Return to Dashboard</button>
+      </div>
+    );
+  }
 
   return (
     <div style={{ display: "flex", height: "100vh" }}>
@@ -152,6 +188,24 @@ function CourseViewer() {
         }}
       >
         <h3 style={{ margin: "0 0 15px 0" }}>{course.title}</h3>
+
+        {/* Table of Contents Toggle */}
+        <button
+          onClick={() => setShowTableOfContents(!showTableOfContents)}
+          style={{
+            width: "100%",
+            padding: "10px",
+            backgroundColor: "#17a2b8",
+            color: "white",
+            border: "none",
+            borderRadius: "6px",
+            cursor: "pointer",
+            fontSize: "14px",
+            marginBottom: "15px"
+          }}
+        >
+          📚 {showTableOfContents ? "Hide" : "Show"} Table of Contents
+        </button>
 
         {/* Progress Bar (only for enrolled users) */}
         {enrollment && (
@@ -192,68 +246,79 @@ function CourseViewer() {
           </div>
         )}
 
-        {/* Module List */}
-        {course.modules.map((module, moduleIndex) => (
-          <div key={moduleIndex} style={{ marginBottom: "15px" }}>
-            <h4
-              style={{
-                margin: "0 0 10px 0",
-                fontSize: "16px",
-                color: moduleIndex === currentModuleIndex ? "#007bff" : "#333",
-              }}
-            >
-              📚 {module.title}
-            </h4>
+        {/* Enhanced Table of Contents or Module List */}
+        {showTableOfContents ? (
+          <TableOfContents
+            course={course}
+            currentModuleIndex={currentModuleIndex}
+            currentLessonIndex={currentLessonIndex}
+            onNavigate={handleTOCNavigation}
+            showVideoLinks={true}
+          />
+        ) : (
+          /* Simplified Module List */
+          course.modules.map((module, moduleIndex) => (
+            <div key={moduleIndex} style={{ marginBottom: "15px" }}>
+              <h4
+                style={{
+                  margin: "0 0 10px 0",
+                  fontSize: "16px",
+                  color: moduleIndex === currentModuleIndex ? "#007bff" : "#333",
+                }}
+              >
+                📚 {module.title}
+              </h4>
 
-            {module.lessons.map((lesson, lessonIndex) => {
-              const isActive =
-                moduleIndex === currentModuleIndex &&
-                lessonIndex === currentLessonIndex;
-              const isCompleted = isLessonCompleted(moduleIndex, lessonIndex);
+              {module.lessons.map((lesson, lessonIndex) => {
+                const isActive =
+                  moduleIndex === currentModuleIndex &&
+                  lessonIndex === currentLessonIndex;
+                const isCompleted = isLessonCompleted(moduleIndex, lessonIndex);
 
-              return (
-                <div
-                  key={lessonIndex}
-                  onClick={() => {
-                    setCurrentModuleIndex(moduleIndex);
-                    setCurrentLessonIndex(lessonIndex);
-                  }}
-                  style={{
-                    padding: "8px 12px",
-                    marginBottom: "5px",
-                    borderRadius: "4px",
-                    cursor: "pointer",
-                    backgroundColor: isActive
-                      ? "#007bff"
-                      : isCompleted
-                        ? "#d4edda"
-                        : "white",
-                    color: isActive
-                      ? "white"
-                      : isCompleted
-                        ? "#155724"
-                        : "#333",
-                    border:
-                      "1px solid " +
-                      (isActive ? "#007bff" : isCompleted ? "#c3e6cb" : "#ddd"),
-                    fontSize: "14px",
-                    display: "flex",
-                    alignItems: "center",
-                    gap: "8px",
-                  }}
-                >
-                  <span>{isCompleted ? "✅" : "📖"}</span>
-                  <span style={{ flex: 1 }}>{lesson.title}</span>
-                  {lesson.duration && (
-                    <span style={{ fontSize: "12px", opacity: 0.7 }}>
-                      {lesson.duration}
-                    </span>
-                  )}
-                </div>
-              );
-            })}
-          </div>
-        ))}
+                return (
+                  <div
+                    key={lessonIndex}
+                    onClick={() => {
+                      setCurrentModuleIndex(moduleIndex);
+                      setCurrentLessonIndex(lessonIndex);
+                    }}
+                    style={{
+                      padding: "8px 12px",
+                      marginBottom: "5px",
+                      borderRadius: "4px",
+                      cursor: "pointer",
+                      backgroundColor: isActive
+                        ? "#007bff"
+                        : isCompleted
+                          ? "#d4edda"
+                          : "white",
+                      color: isActive
+                        ? "white"
+                        : isCompleted
+                          ? "#155724"
+                          : "#333",
+                      border:
+                        "1px solid " +
+                        (isActive ? "#007bff" : isCompleted ? "#c3e6cb" : "#ddd"),
+                      fontSize: "14px",
+                      display: "flex",
+                      alignItems: "center",
+                      gap: "8px",
+                    }}
+                  >
+                    <span>{isCompleted ? "✅" : "📖"}</span>
+                    <span style={{ flex: 1 }}>{lesson.title}</span>
+                    {lesson.duration && (
+                      <span style={{ fontSize: "12px", opacity: 0.7 }}>
+                        {lesson.duration}
+                      </span>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          ))
+        )}
       </div>
 
       {/* Main Content */}
@@ -328,10 +393,10 @@ function CourseViewer() {
           </div>
         )}
 
-        {currentLesson && (
+        {currentLesson ? (
           <div>
             <div style={{ marginBottom: "20px" }}>
-              <h1 style={{ margin: "0 0 10px 0" }}>{currentLesson.title}</h1>
+              <h1 style={{ margin: "0 0 10px 0" }}>{currentLesson.title || 'Untitled Lesson'}</h1>
               <div
                 style={{
                   display: "flex",
@@ -366,10 +431,49 @@ function CourseViewer() {
             >
               <div
                 dangerouslySetInnerHTML={{
-                  __html: currentLesson.content.replace(/\n/g, "<br>"),
+                  __html: sanitizeForDisplay(currentLesson.markdownContent || currentLesson.content || 'No content available')
                 }}
               />
             </div>
+
+            {/* Audio Player for Lesson Content */}
+            <AudioPlayer 
+              content={sanitizeForDisplay(currentLesson.markdownContent || currentLesson.content || 'No content available')}
+              title={currentLesson.title || 'Untitled Lesson'}
+            />
+
+            {/* Video upload is handled in CourseEditor, not in CourseViewer */}
+
+            {/* Display existing video for all users */}
+            {currentLesson.videoUrl && (
+              <div style={{
+                backgroundColor: '#f8f9fa',
+                border: '1px solid #e9ecef',
+                borderRadius: '8px',
+                padding: '16px',
+                marginBottom: '20px'
+              }}>
+                <h4 style={{
+                  margin: '0 0 12px 0',
+                  color: '#2c3e50',
+                  fontSize: '16px'
+                }}>
+                  🎥 Lesson Video
+                </h4>
+                <video
+                  controls
+                  style={{
+                    width: '100%',
+                    maxWidth: '600px',
+                    height: 'auto',
+                    borderRadius: '4px'
+                  }}
+                >
+                  <source src={currentLesson.videoUrl} type="video/mp4" />
+                  Your browser does not support the video tag.
+                </video>
+              </div>
+            )}
 
             {/* Lesson Actions */}
             <div
@@ -476,6 +580,27 @@ function CourseViewer() {
                 </button>
               )}
             </div>
+          </div>
+        ) : (
+          <div style={{ padding: "20px", textAlign: "center" }}>
+            <h2>No Lesson Available</h2>
+            <p>The selected lesson could not be found or is not available.</p>
+            <button 
+              onClick={() => {
+                setCurrentModuleIndex(0);
+                setCurrentLessonIndex(0);
+              }}
+              style={{
+                backgroundColor: "#3498db",
+                color: "white",
+                border: "none",
+                padding: "10px 20px",
+                borderRadius: "5px",
+                cursor: "pointer"
+              }}
+            >
+              Go to First Lesson
+            </button>
           </div>
         )}
       </div>

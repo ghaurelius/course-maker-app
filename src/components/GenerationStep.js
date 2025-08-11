@@ -1,46 +1,143 @@
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 
 const GenerationStep = ({ 
   isGenerating, 
   questionAnswers, 
   multimediaPrefs, 
   onGenerate, 
-  onBack 
+  onBack,
+  generatedModuleNames = [],
+  onModuleNamesChange
 }) => {
+  const [editableModuleNames, setEditableModuleNames] = useState([]);
+  const [showModuleEditor, setShowModuleEditor] = useState(false);
+
+  // Initialize editable module names when generated names are available
+  useEffect(() => {
+    if (generatedModuleNames.length > 0) {
+      setEditableModuleNames([...generatedModuleNames]);
+      setShowModuleEditor(true);
+    }
+  }, [generatedModuleNames]);
+
+  const handleModuleNameChange = (index, newName) => {
+    const updatedNames = [...editableModuleNames];
+    updatedNames[index] = newName;
+    setEditableModuleNames(updatedNames);
+    if (onModuleNamesChange) {
+      onModuleNamesChange(updatedNames);
+    }
+  };
+
+  const handleProceedWithGeneration = () => {
+    onGenerate(editableModuleNames);
+  };
   return (
     <div style={{ backgroundColor: "#f8f9fa", padding: "30px", borderRadius: "12px", textAlign: "center" }}>
       <h2 style={{ color: "#2c3e50", marginBottom: "20px" }}>⚡ Step 4: AI Course Generation</h2>
       
       {!isGenerating ? (
         <div>
-          <p style={{ marginBottom: "20px", fontSize: "16px" }}>
-            Ready to generate your course with AI! This will create:
-          </p>
-          <ul style={{ textAlign: "left", maxWidth: "400px", margin: "0 auto 20px" }}>
-            <li>{questionAnswers.moduleCount} modules with custom structure</li>
-            <li>Comprehensive lesson content</li>
-            <li>Interactive elements and assessments</li>
-            {multimediaPrefs.includeAudio && <li>Audio narration</li>}
-            {multimediaPrefs.includeVideo && <li>Video content</li>}
-            {multimediaPrefs.includeQuizzes && <li>Interactive quizzes</li>}
-            {multimediaPrefs.includeExercises && <li>Hands-on exercises</li>}
-            {multimediaPrefs.includeResources && <li>Additional resources</li>}
-          </ul>
-          
-          <button
-            onClick={onGenerate}
-            style={{
-              padding: "15px 30px",
-              backgroundColor: "#27ae60",
-              color: "white",
-              border: "none",
-              borderRadius: "8px",
-              fontSize: "16px",
-              cursor: "pointer"
-            }}
-          >
-            🚀 Generate My Course
-          </button>
+          {!showModuleEditor ? (
+            <div>
+              <p style={{ marginBottom: "20px", fontSize: "16px" }}>
+                Ready to generate your course with AI! This will create:
+              </p>
+              <ul style={{ textAlign: "left", maxWidth: "400px", margin: "0 auto 20px" }}>
+                <li>{questionAnswers.moduleCount} modules with custom structure</li>
+                <li>Comprehensive lesson content</li>
+                <li>Interactive elements and assessments</li>
+                {multimediaPrefs.includeAudio && <li>Audio narration</li>}
+                {multimediaPrefs.includeVideo && <li>Video content</li>}
+                {multimediaPrefs.includeQuizzes && <li>Interactive quizzes</li>}
+                {multimediaPrefs.includeExercises && <li>Hands-on exercises</li>}
+                {multimediaPrefs.includeResources && <li>Additional resources</li>}
+              </ul>
+              
+              <button
+                onClick={onGenerate}
+                style={{
+                  padding: "15px 30px",
+                  backgroundColor: "#27ae60",
+                  color: "white",
+                  border: "none",
+                  borderRadius: "8px",
+                  fontSize: "16px",
+                  cursor: "pointer"
+                }}
+              >
+                🚀 Generate My Course
+              </button>
+            </div>
+          ) : (
+            <div>
+              <h3 style={{ color: "#2c3e50", marginBottom: "20px" }}>📝 Review & Edit Module Names</h3>
+              <p style={{ marginBottom: "20px", fontSize: "14px", color: "#666" }}>
+                AI has generated module names based on your content. You can edit them before proceeding:
+              </p>
+              
+              <div style={{ maxWidth: "600px", margin: "0 auto 20px" }}>
+                {editableModuleNames.map((moduleName, index) => (
+                  <div key={index} style={{ marginBottom: "15px", textAlign: "left" }}>
+                    <label style={{ 
+                      display: "block", 
+                      marginBottom: "5px", 
+                      fontWeight: "bold", 
+                      color: "#2c3e50" 
+                    }}>
+                      Module {index + 1}:
+                    </label>
+                    <input
+                      type="text"
+                      value={moduleName}
+                      onChange={(e) => handleModuleNameChange(index, e.target.value)}
+                      style={{
+                        width: "100%",
+                        padding: "12px",
+                        border: "2px solid #e0e0e0",
+                        borderRadius: "6px",
+                        fontSize: "14px",
+                        backgroundColor: "#fff",
+                        transition: "border-color 0.3s ease"
+                      }}
+                      onFocus={(e) => e.target.style.borderColor = "#3498db"}
+                      onBlur={(e) => e.target.style.borderColor = "#e0e0e0"}
+                    />
+                  </div>
+                ))}
+              </div>
+              
+              <div style={{ display: "flex", gap: "15px", justifyContent: "center", marginTop: "20px" }}>
+                <button
+                  onClick={() => setShowModuleEditor(false)}
+                  style={{
+                    padding: "12px 24px",
+                    backgroundColor: "#95a5a6",
+                    color: "white",
+                    border: "none",
+                    borderRadius: "6px",
+                    cursor: "pointer"
+                  }}
+                >
+                  ← Back to Overview
+                </button>
+                <button
+                  onClick={handleProceedWithGeneration}
+                  style={{
+                    padding: "15px 30px",
+                    backgroundColor: "#27ae60",
+                    color: "white",
+                    border: "none",
+                    borderRadius: "8px",
+                    fontSize: "16px",
+                    cursor: "pointer"
+                  }}
+                >
+                  🚀 Generate Course with These Names
+                </button>
+              </div>
+            </div>
+          )}
         </div>
       ) : (
         <div>
