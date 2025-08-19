@@ -96,9 +96,9 @@ export const generateIntelligentFallback = (sourceContent, insights, moduleTitle
 This lesson covers key concepts from the source material${concepts.length > 0 ? `, focusing on ${concepts.slice(0, 3).join(', ')}` : ''}.
 
 **Learning Objectives:**
-- Understand the main concepts presented in the source material
-- Identify key terminology and definitions
-- Apply the concepts through practical exercises
+1. Understand the main concepts presented in the source material
+2. Identify key terminology and definitions
+3. Apply the concepts through practical exercises
 ${examples.length > 0 ? '- Analyze real-world examples and applications' : ''}
 `);
 

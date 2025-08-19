@@ -1,5 +1,25 @@
-.App {
-  text-align: center;
+.App { 
+  text-align: left; 
+}
+
+.editor-container {
+  background: white;
+  border-radius: 8px;
+  box-shadow: 0 2px 10px rgba(0,0,0,0.05);
+  padding: 2rem;
+  max-width: 1000px;
+  width: 100%;
+}
+
+/* TipTap and Prose text alignment */
+.tiptap,
+.prose,
+.prose h1, .prose h2, .prose h3, .prose p, .prose li { 
+  text-align: left; 
+}
+
+.prose { 
+  max-width: 65ch; 
 }
 
 .App-logo {

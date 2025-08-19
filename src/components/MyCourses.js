@@ -12,6 +12,7 @@ import {
   orderBy,
   updateDoc,
 } from "firebase/firestore";
+import { confirmDialog } from "./ui/confirmDialog";
 
 function MyCourses() {
   const { currentUser } = useAuth();
@@ -49,8 +50,8 @@ function MyCourses() {
 
   const handleDeleteCourse = async (courseId, courseTitle) => {
     if (
-      window.confirm(
-        `Are you sure you want to delete "${courseTitle}"? This action cannot be undone.`,
+      await confirmDialog(
+        `Are you sure you want to delete "${courseTitle}"? This action cannot be undone.`
       )
     ) {
       try {
@@ -69,7 +70,7 @@ function MyCourses() {
   };
 
   const handleViewCourse = (courseId) => {
-    navigate(`/view-course/${courseId}`);
+    navigate(`/course/${courseId}`);
   };
 
   const formatDate = (timestamp) => {

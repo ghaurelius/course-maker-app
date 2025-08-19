@@ -4,6 +4,7 @@ import { doc, getDoc, updateDoc } from "firebase/firestore";
 import { db } from "../firebase";
 import { useAuth } from "../contexts/AuthContext";
 import VideoUpload from "./VideoUpload";
+import { confirmDialog } from "./ui/confirmDialog";
 
 const CourseEditor = () => {
   const { courseId } = useParams();
@@ -36,6 +37,17 @@ const CourseEditor = () => {
         const courseData = courseDoc.data();
         setCourse(courseData);
 
+        // Debug: Log the course data structure
+        console.log("📚 Course data loaded:", courseData);
+        console.log("📝 Modules structure:", courseData.modules);
+        if (courseData.modules && courseData.modules[0]) {
+          console.log("🔍 First module lessons:", courseData.modules[0].lessons);
+          if (courseData.modules[0].lessons && courseData.modules[0].lessons[0]) {
+            console.log("📄 First lesson structure:", courseData.modules[0].lessons[0]);
+            console.log("📄 First lesson ALL FIELDS:", Object.keys(courseData.modules[0].lessons[0]));
+          }
+        }
+
         // Populate form states
         setTitle(courseData.title || "");
         setDescription(courseData.description || "");
@@ -43,7 +55,54 @@ const CourseEditor = () => {
         setDifficulty(courseData.difficulty || "");
         setEstimatedDuration(courseData.estimatedDuration || "");
         setTargetAudience(courseData.targetAudience || "");
-        setModules(courseData.modules || []);
+        
+        // Process modules to ensure proper content structure
+        const processedModules = (courseData.modules || []).map(module => ({
+          ...module,
+          lessons: (module.lessons || []).map(lesson => {
+            // Handle both new and existing courses
+            let editableContent = "";
+            
+            if (lesson.content) {
+              // New courses have clean Markdown in 'content' field
+              editableContent = lesson.content;
+            } else if (lesson.markdownContent) {
+              // Existing courses have formatted HTML in 'markdownContent' - convert back to clean text
+              editableContent = lesson.markdownContent
+                .replace(/<[^>]*>/g, '') // Remove HTML tags
+                .replace(/&nbsp;/g, ' ') // Replace HTML entities
+                .replace(/&amp;/g, '&')
+                .replace(/&lt;/g, '<')
+                .replace(/&gt;/g, '>')
+                .replace(/&quot;/g, '"')
+                .trim();
+            } else if (lesson.lessonContent) {
+              // Handle lessonContent field
+              editableContent = typeof lesson.lessonContent === 'string' 
+                ? lesson.lessonContent.replace(/<[^>]*>/g, '').trim()
+                : "";
+            } else if (lesson.body) {
+              // Handle body field
+              editableContent = typeof lesson.body === 'string' 
+                ? lesson.body.replace(/<[^>]*>/g, '').trim()
+                : "";
+            } else {
+              // Fallback - try to find any text content
+              editableContent = lesson.text || lesson.description || "";
+            }
+            
+            console.log(`📝 Lesson "${lesson.title}" content:`, editableContent.substring(0, 100) + "...");
+            console.log(`📝 Lesson "${lesson.title}" RAW DATA:`, lesson);
+            
+            return {
+              ...lesson,
+              content: editableContent
+            };
+          })
+        }));
+        
+        console.log("🔧 Processed modules:", processedModules);
+        setModules(processedModules);
       } else {
         alert("Course not found!");
         navigate("/dashboard");
@@ -100,8 +159,9 @@ const CourseEditor = () => {
     setModules([...modules, newModule]);
   };
 
-  const deleteModule = (moduleIndex) => {
-    if (window.confirm("Are you sure you want to delete this module?")) {
+  const deleteModule = async (moduleIndex) => {
+    const confirmed = await confirmDialog("Are you sure you want to delete this module?");
+    if (confirmed) {
       const updatedModules = modules.filter(
         (_, index) => index !== moduleIndex,
       );
@@ -129,8 +189,9 @@ const CourseEditor = () => {
     setModules(updatedModules);
   };
 
-  const deleteLesson = (moduleIndex, lessonIndex) => {
-    if (window.confirm("Are you sure you want to delete this lesson?")) {
+  const deleteLesson = async (moduleIndex, lessonIndex) => {
+    const confirmed = await confirmDialog("Are you sure you want to delete this lesson?");
+    if (confirmed) {
       const updatedModules = [...modules];
       updatedModules[moduleIndex].lessons = updatedModules[
         moduleIndex
@@ -708,10 +769,25 @@ const CourseEditor = () => {
                           Lesson Content
                         </label>
                         <textarea
-                          value={
-                            modules[selectedModule].lessons[selectedLesson]
-                              ?.content || ""
-                          }
+                          value={(() => {
+                            const lesson = modules[selectedModule]?.lessons[selectedLesson];
+                            if (!lesson) return "";
+                            
+                            console.log("🔍 TEXTAREA DEBUG - Current lesson:", lesson);
+                            console.log("🔍 TEXTAREA DEBUG - Lesson keys:", Object.keys(lesson));
+                            
+                            // Try all possible content fields
+                            const content = lesson.content || 
+                                          lesson.lessonContent || 
+                                          lesson.markdownContent || 
+                                          lesson.body || 
+                                          lesson.text || 
+                                          lesson.description || 
+                                          "";
+                                          
+                            console.log("🔍 TEXTAREA DEBUG - Final content:", content.substring(0, 200));
+                            return content;
+                          })()}
                           onChange={(e) =>
                             updateLesson(
                               selectedModule,

@@ -232,7 +232,7 @@ export function EnrollmentProvider({ children }) {
           ...enrollmentDoc.data(),
         };
 
-        // Get course details
+        // Get course details with better error handling
         try {
           const courseDoc = await getDoc(
             doc(db, "courses", enrollmentData.courseId),
@@ -242,9 +242,32 @@ export function EnrollmentProvider({ children }) {
               id: courseDoc.id,
               ...courseDoc.data(),
             };
+          } else {
+            // Course not found - using fallback data (reduced logging to prevent console spam)
+            enrollmentData.courseDetails = {
+              id: enrollmentData.courseId,
+              title: enrollmentData.courseTitle || "Unknown Course",
+              description: "Course details are temporarily unavailable. The course may have been deleted or moved.",
+              modules: [],
+              metadata: {
+                totalLessons: 0,
+                estimatedDuration: 0
+              }
+            };
           }
         } catch (error) {
           console.error("Error fetching course details:", error);
+          // Provide fallback course details on error
+          enrollmentData.courseDetails = {
+            id: enrollmentData.courseId,
+            title: enrollmentData.courseTitle || "Unknown Course",
+            description: "Unable to load course details. Please try refreshing the page.",
+            modules: [],
+            metadata: {
+              totalLessons: 0,
+              estimatedDuration: 0
+            }
+          };
         }
 
         enrollmentsData.push(enrollmentData);

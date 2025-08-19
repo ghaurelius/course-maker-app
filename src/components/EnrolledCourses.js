@@ -2,6 +2,7 @@ import React from "react";
 import { useEnrollment } from "../contexts/EnrollmentContext";
 import { useAuth } from "../contexts/AuthContext";
 import { useNavigate } from "react-router-dom";
+import { confirmDialog } from "./ui/confirmDialog";
 
 function EnrolledCourses() {
   const { enrolledCourses, loading, unenrollFromCourse } = useEnrollment();
@@ -30,7 +31,7 @@ function EnrolledCourses() {
 
   const handleUnenroll = async (courseId, courseTitle) => {
     if (
-      window.confirm(
+      await confirmDialog(
         `Are you sure you want to unenroll from "${courseTitle}"? Your progress will be lost.`,
       )
     ) {
@@ -83,10 +84,26 @@ function EnrolledCourses() {
         </div>
       ) : (
         <div>
-          <p style={{ marginBottom: "30px", color: "#666" }}>
-            You are enrolled in {enrolledCourses.length} course
-            {enrolledCourses.length !== 1 ? "s" : ""}
-          </p>
+          <div style={{ marginBottom: "30px", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+            <p style={{ color: "#666", margin: 0 }}>
+              You are enrolled in {enrolledCourses.length} course
+              {enrolledCourses.length !== 1 ? "s" : ""}
+            </p>
+            <button
+              onClick={() => navigate("/public-courses")}
+              style={{
+                backgroundColor: "#28a745",
+                color: "white",
+                border: "none",
+                padding: "8px 16px",
+                borderRadius: "6px",
+                cursor: "pointer",
+                fontSize: "14px",
+              }}
+            >
+              + Browse More Courses
+            </button>
+          </div>
 
           <div
             style={{
@@ -104,13 +121,32 @@ function EnrolledCourses() {
                   <div
                     key={enrollment.id}
                     style={{
-                      border: "1px solid #ddd",
+                      border: "1px solid #e74c3c",
                       borderRadius: "8px",
                       padding: "20px",
-                      backgroundColor: "#f8f9fa",
+                      backgroundColor: "#fdf2f2",
                     }}
                   >
-                    <p>Course details unavailable</p>
+                    <h3 style={{ margin: "0 0 10px 0", color: "#e74c3c" }}>
+                      ⚠️ Course Unavailable
+                    </h3>
+                    <p style={{ color: "#666", margin: "0 0 15px 0" }}>
+                      This course is temporarily unavailable. It may have been deleted or moved.
+                    </p>
+                    <button
+                      onClick={() => handleUnenroll(enrollment.courseId, "Unknown Course")}
+                      style={{
+                        backgroundColor: "#e74c3c",
+                        color: "white",
+                        border: "none",
+                        padding: "8px 16px",
+                        borderRadius: "4px",
+                        cursor: "pointer",
+                        fontSize: "14px",
+                      }}
+                    >
+                      Remove from My Learning
+                    </button>
                   </div>
                 );
               }

@@ -32,11 +32,15 @@ function addSpaceAfterCommas(s) {
  * @returns {string} String with normalized bullets
  */
 function normalizeBullets(s) {
-  // Convert weird bullets to Markdown hyphens; collapse double spaces
+  // Convert weird bullets to Markdown hyphens; collapse double spaces; fix alignment
   return s
     .replace(/^[ \t]*•[ \t]*/gmi, '- ')
     .replace(/^[ \t]*▪︎[ \t]*/gmi, '- ')
-    .replace(/[ \t]{2,}/g, ' ');
+    .replace(/^[ \t]*\*[ \t]*/gmi, '- ')  // Convert asterisk bullets
+    .replace(/^[ \t]*-[ \t]{2,}/gmi, '- ') // Normalize multiple spaces after dash
+    .replace(/^[ \t]{2,}-[ \t]*/gmi, '- ') // Remove extra indentation before dash
+    .replace(/[ \t]{2,}/g, ' ')           // Collapse multiple spaces
+    .replace(/^- [ \t]+/gmi, '- ');       // Ensure single space after dash
 }
 
 /**

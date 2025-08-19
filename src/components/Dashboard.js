@@ -27,6 +27,10 @@ function Dashboard() {
     navigate("/public-courses");
   };
 
+  const handleTestEditor = () => {
+    navigate("/test-editor");
+  };
+
   return (
     <div style={{ padding: "20px" }}>
       <div
@@ -100,10 +104,25 @@ function Dashboard() {
               border: "none",
               borderRadius: "8px",
               fontSize: "16px",
+              marginRight: "15px",
               cursor: "pointer",
             }}
           >
             🌍 Browse Courses
+          </button>
+          <button
+            onClick={handleTestEditor}
+            style={{
+              padding: "15px 30px",
+              backgroundColor: "#fd7e14",
+              color: "white",
+              border: "none",
+              borderRadius: "8px",
+              fontSize: "16px",
+              cursor: "pointer",
+            }}
+          >
+            🧪 Test Editor
           </button>
         </div>
       </div>

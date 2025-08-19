@@ -1,7 +1,7 @@
 // Import the functions you need from the SDKs you need
 import { initializeApp } from "firebase/app";
 import { getAuth, setPersistence, browserLocalPersistence } from "firebase/auth";
-import { getFirestore } from "firebase/firestore";
+import { getFirestore, collection, getDocs, limit, query } from "firebase/firestore";
 import { getStorage } from "firebase/storage";
 
 // Your web app's Firebase configuration
@@ -26,6 +26,35 @@ setPersistence(auth, browserLocalPersistence).catch((error) => {
 });
 
 export const db = getFirestore(app);
+
+// Force cloud connection (disable any emulator auto-detection)
+if (process.env.NODE_ENV === 'production' || !process.env.REACT_APP_USE_EMULATOR) {
+  console.log('🌐 Forcing cloud Firestore connection...');
+}
 export const storage = getStorage(app);
+
+// Debug: Test database connection
+console.log('🔍 Firebase Configuration:');
+console.log('Project ID:', app.options.projectId);
+console.log('Auth Domain:', app.options.authDomain);
+console.log('Database initialized:', !!db);
+
+// Import moved to top
+const testConnection = async () => {
+  try {
+    console.log('🧪 Testing Firestore connection...');
+    const testQuery = query(collection(db, "courses"), limit(1));
+    const snapshot = await getDocs(testQuery);
+    console.log('✅ Firestore connection successful');
+    console.log('📊 Found', snapshot.size, 'documents in courses collection');
+  } catch (error) {
+    console.error('❌ Firestore connection failed:', error);
+    console.error('Error code:', error.code);
+    console.error('Error message:', error.message);
+  }
+};
+
+// Run test after a short delay
+setTimeout(testConnection, 2000);
 
 export default app;

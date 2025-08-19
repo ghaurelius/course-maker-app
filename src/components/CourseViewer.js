@@ -23,6 +23,7 @@ function CourseViewer() {
   const [completedLessons, setCompletedLessons] = useState([]);
   const [showTableOfContents, setShowTableOfContents] = useState(false);
   const [isCreatorMode, setIsCreatorMode] = useState(false);
+  const [viewMode, setViewMode] = useState('normal'); // 'normal', 'highlights'
 
   useEffect(() => {
     const fetchCourse = async () => {
@@ -188,6 +189,44 @@ function CourseViewer() {
         }}
       >
         <h3 style={{ margin: "0 0 15px 0" }}>{course.title}</h3>
+
+        {/* View Mode Toggle */}
+        <div style={{ marginBottom: "15px" }}>
+          <div style={{ display: "flex", gap: "5px", marginBottom: "10px" }}>
+            <button
+              onClick={() => setViewMode('normal')}
+              style={{
+                flex: 1,
+                padding: "8px 12px",
+                backgroundColor: viewMode === 'normal' ? "#007bff" : "#f8f9fa",
+                color: viewMode === 'normal' ? "white" : "#495057",
+                border: "1px solid #dee2e6",
+                borderRadius: "4px",
+                cursor: "pointer",
+                fontSize: "12px",
+                fontWeight: "500"
+              }}
+            >
+              📖 Normal View
+            </button>
+            <button
+              onClick={() => setViewMode('highlights')}
+              style={{
+                flex: 1,
+                padding: "8px 12px",
+                backgroundColor: viewMode === 'highlights' ? "#007bff" : "#f8f9fa",
+                color: viewMode === 'highlights' ? "white" : "#495057",
+                border: "1px solid #dee2e6",
+                borderRadius: "4px",
+                cursor: "pointer",
+                fontSize: "12px",
+                fontWeight: "500"
+              }}
+            >
+              📋 Highlights
+            </button>
+          </div>
+        </div>
 
         {/* Table of Contents Toggle */}
         <button
@@ -419,22 +458,135 @@ function CourseViewer() {
               </div>
             </div>
 
-            <div
-              style={{
+            {/* Conditional Content Display based on View Mode */}
+            {viewMode === 'highlights' ? (
+              /* Highlights Mode: Show course overview instead of individual lesson */
+              <div style={{
                 backgroundColor: "white",
                 border: "1px solid #ddd",
                 borderRadius: "8px",
                 padding: "30px",
                 marginBottom: "20px",
-                lineHeight: "1.6",
-              }}
-            >
+              }}>
+                <div style={{ marginBottom: "25px", textAlign: "center" }}>
+                  <h2 style={{ color: "#2c3e50", marginBottom: "10px" }}>📋 Course Highlights</h2>
+                  <p style={{ color: "#666", fontSize: "14px" }}>Overview of all modules and lessons in this course</p>
+                </div>
+
+                {/* Course Overview */}
+                <div style={{ marginBottom: "25px", padding: "15px", backgroundColor: "#f8f9fa", borderRadius: "6px" }}>
+                  <h3 style={{ margin: "0 0 10px 0", color: "#495057" }}>Course Overview</h3>
+                  <p style={{ margin: "0", fontSize: "14px", color: "#666" }}>{course.description || 'No description available'}</p>
+                  <div style={{ marginTop: "10px", fontSize: "12px", color: "#999" }}>
+                    <strong>Total Modules:</strong> {course.modules?.length || 0} | 
+                    <strong> Total Lessons:</strong> {course.modules?.reduce((total, module) => total + (module.lessons?.length || 0), 0) || 0}
+                    {course.estimatedDuration && <span> | <strong>Duration:</strong> {course.estimatedDuration}</span>}
+                  </div>
+                </div>
+
+                {/* Module Highlights */}
+                {course.modules?.map((module, moduleIndex) => (
+                  <div key={module.id || moduleIndex} style={{
+                    backgroundColor: "#fff",
+                    border: "1px solid #e9ecef",
+                    borderRadius: "6px",
+                    padding: "20px",
+                    marginBottom: "20px"
+                  }}>
+                    <h4 style={{ color: "#2c3e50", marginBottom: "10px" }}>
+                      📚 Module {moduleIndex + 1}: {module.title}
+                    </h4>
+                    <p style={{ fontSize: "14px", color: "#666", marginBottom: "15px" }}>
+                      {module.description || 'No description available'}
+                    </p>
+
+                    {/* Learning Outcomes */}
+                    {module.learningOutcomes && module.learningOutcomes.length > 0 && (
+                      <div style={{ marginBottom: "15px" }}>
+                        <h6 style={{ fontSize: "13px", fontWeight: "bold", color: "#495057", marginBottom: "8px" }}>
+                          🎯 Learning Outcomes:
+                        </h6>
+                        <ul style={{ fontSize: "12px", color: "#666", marginLeft: "15px", marginBottom: "0" }}>
+                          {module.learningOutcomes.slice(0, 3).map((outcome, idx) => (
+                            <li key={idx}>{outcome}</li>
+                          ))}
+                          {module.learningOutcomes.length > 3 && (
+                            <li style={{ fontStyle: "italic", color: "#999" }}>
+                              + {module.learningOutcomes.length - 3} more outcomes
+                            </li>
+                          )}
+                        </ul>
+                      </div>
+                    )}
+
+                    {/* Lesson List */}
+                    <div>
+                      <h6 style={{ fontSize: "13px", fontWeight: "bold", color: "#495057", marginBottom: "8px" }}>
+                        📖 Lessons ({module.lessons?.length || 0}):
+                      </h6>
+                      <div style={{ display: "grid", gap: "8px" }}>
+                        {module.lessons?.map((lesson, lessonIndex) => (
+                          <div key={lesson.id || lessonIndex} style={{
+                            display: "flex",
+                            justifyContent: "space-between",
+                            alignItems: "center",
+                            padding: "8px 12px",
+                            backgroundColor: "#f8f9fa",
+                            borderRadius: "4px",
+                            fontSize: "12px"
+                          }}>
+                            <span style={{ color: "#495057" }}>
+                              {lessonIndex + 1}. {lesson.title || 'Untitled Lesson'}
+                            </span>
+                            <div style={{ display: "flex", gap: "8px", alignItems: "center" }}>
+                              {lesson.duration && (
+                                <span style={{ color: "#666", backgroundColor: "#e9ecef", padding: "2px 6px", borderRadius: "10px" }}>
+                                  ⏱️ {lesson.duration}
+                                </span>
+                              )}
+                              {lesson.videoUrl && (
+                                <span style={{ color: "#1976d2", backgroundColor: "#e3f2fd", padding: "2px 6px", borderRadius: "10px" }}>
+                                  🎥 Video
+                                </span>
+                              )}
+                              {lesson.type && (
+                                <span style={{ color: "#7b1fa2", backgroundColor: "#f3e5f5", padding: "2px 6px", borderRadius: "10px" }}>
+                                  {lesson.type}
+                                </span>
+                              )}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+                ))}
+
+                <div style={{ textAlign: "center", marginTop: "25px", padding: "15px", backgroundColor: "#e8f4fd", borderRadius: "6px" }}>
+                  <p style={{ margin: "0", fontSize: "13px", color: "#0c5460" }}>
+                    💡 <strong>Tip:</strong> Switch to "Normal View" to access individual lessons and track your progress.
+                  </p>
+                </div>
+              </div>
+            ) : (
+              /* Normal Mode: Show individual lesson content */
               <div
-                dangerouslySetInnerHTML={{
-                  __html: sanitizeForDisplay(currentLesson.markdownContent || currentLesson.content || 'No content available')
+                style={{
+                  backgroundColor: "white",
+                  border: "1px solid #ddd",
+                  borderRadius: "8px",
+                  padding: "30px",
+                  marginBottom: "20px",
+                  lineHeight: "1.6",
                 }}
-              />
-            </div>
+              >
+                <div
+                  dangerouslySetInnerHTML={{
+                    __html: sanitizeForDisplay(currentLesson.markdownContent || currentLesson.content || 'No content available')
+                  }}
+                />
+              </div>
+            )}
 
             {/* Audio Player for Lesson Content */}
             <AudioPlayer 

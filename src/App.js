@@ -1,4 +1,4 @@
-import React from "react";
+import React, { Suspense } from "react";
 import {
   BrowserRouter as Router,
   Routes,
@@ -14,10 +14,23 @@ import Dashboard from "./components/Dashboard";
 import CourseCreator from "./components/CourseCreator";
 import MyCourses from "./components/MyCourses";
 import CourseViewer from "./components/CourseViewer";
-import CourseEditor from "./components/CourseEditor";
+// import CourseEditor from "./components/CourseEditor"; // (legacy – keep for now, but unused)
+import EditCoursePage from "./pages/EditCoursePage";
 import PublicCourses from "./components/PublicCourses";
 import EnrolledCourses from "./components/EnrolledCourses";
+// Enhanced Course Editor Panel with professional AppShell
+import IntegratedCourseEditor from './components/IntegratedCourseEditor';
+import SimpleEditorDemo from "./components/SimpleEditorDemo";
 import "./App.css";
+import { getFlag } from './utils/env';
+
+const TestEditorSandbox = React.lazy(() => import('./pages/TestEditorSandbox'));
+
+// Support both Vite and CRA variable names:
+const PRO_EDITOR_ENABLED = getFlag(
+  'VITE_PRO_EDITOR_INTEGRATION',        // Vite style
+  'REACT_APP_PRO_EDITOR_INTEGRATION'    // CRA style
+);
 
 // Protected Route Component
 function ProtectedRoute({ children }) {
@@ -107,11 +120,33 @@ function App() {
                 path="/edit-course/:courseId"
                 element={
                   <ProtectedRoute>
-                    <CourseEditor />
+                    <EditCoursePage />
                   </ProtectedRoute>
                 }
               />
               <Route path="/course/:courseId" element={<CourseViewer />} />
+              <Route
+                path="/test-editor"
+                element={
+                  <ProtectedRoute>
+                    <Suspense fallback={<div style={{padding:20}}>Loading editor…</div>}>
+                      <TestEditorSandbox />
+                    </Suspense>
+                  </ProtectedRoute>
+                }
+              />
+              {PRO_EDITOR_ENABLED && (
+                <Route
+                  path="/edit-course-pro/:courseId"
+                  element={
+                    <ProtectedRoute>
+                      {/* This will render a Firestore bridge that passes onSave to TestEditorPage */}
+                      {/* <EditCoursePage /> */}
+                      <div style={{padding:20}}>Pro editor integration disabled.</div>
+                    </ProtectedRoute>
+                  }
+                />
+              )}
             </Routes>
           </div>
           </Router>

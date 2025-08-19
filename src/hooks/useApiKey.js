@@ -17,8 +17,8 @@ const useApiKey = (currentUser) => {
       const geminiKey = localStorage.getItem('gemini_api_key') || '';
       
       console.log('🔍 Loading API keys from localStorage:');
-      console.log(`  - OpenAI key: ${openaiKey ? '✅ Found' : '❌ Not found'}`);
-      console.log(`  - Gemini key: ${geminiKey ? '✅ Found' : '❌ Not found'}`);
+      console.log(`  - OpenAI key: ${openaiKey ? `✅ Found (${openaiKey.substring(0, 10)}...)` : '❌ Not found'}`);
+      console.log(`  - Gemini key: ${geminiKey ? `✅ Found (${geminiKey.substring(0, 10)}...)` : '❌ Not found'}`);
       
       setStoredApiKeys({
         openai: openaiKey,
@@ -35,6 +35,24 @@ const useApiKey = (currentUser) => {
       }
     }
   }, [currentUser]);
+
+  // Force refresh API keys from localStorage
+  const refreshApiKeys = () => {
+    console.log('🔄 Force refreshing API keys from localStorage...');
+    const openaiKey = localStorage.getItem('openai_api_key') || '';
+    const geminiKey = localStorage.getItem('gemini_api_key') || '';
+    
+    console.log('Fresh keys from localStorage:');
+    console.log(`  - OpenAI: ${openaiKey ? `✅ ${openaiKey.substring(0, 10)}...` : '❌ Not found'}`);
+    console.log(`  - Gemini: ${geminiKey ? `✅ ${geminiKey.substring(0, 10)}...` : '❌ Not found'}`);
+    
+    setStoredApiKeys({
+      openai: openaiKey,
+      gemini: geminiKey
+    });
+    
+    return { openai: openaiKey, gemini: geminiKey };
+  };
 
   // API Key Management Functions
   const saveApiKey = () => {
@@ -238,7 +256,8 @@ const useApiKey = (currentUser) => {
     handleApiFailover,
     getApiKeyForProvider,
     debugApiKeys,
-    testApiConnection
+    testApiConnection,
+    refreshApiKeys
   };
 };
 

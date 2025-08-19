@@ -155,18 +155,18 @@ export const addMinimalFormatting = (content) => {
   formatted = formatted.replace(/\*([^*]+)\*/g, 
     `<em style="font-style: italic; color: #4a5568;">$1</em>`);
   
-  // Simple Markdown list conversion to HTML with consistent styling
+  // Enhanced Markdown list conversion with proper alignment and spacing
   formatted = formatted.replace(/^- (.+)$/gm, 
-    `<li style="margin: 8px 0; padding: 4px 0; color: #2d3748; line-height: 1.7; text-align: left; font-size: 16px;">$1</li>`);
+    `<li style="margin: 12px 0; padding: 6px 0; color: #2d3748; line-height: 1.8; text-align: left; font-size: 16px; display: list-item; list-style-position: outside;">$1</li>`);
   
-  // Wrap consecutive list items in <ul> tags
+  // Wrap consecutive list items in <ul> tags with improved styling
   formatted = formatted.replace(/(<li[^>]*>.*<\/li>\s*)+/gs, (match) => 
-    `<ul style="margin: 20px 0; padding-left: 20px; list-style-type: disc; font-size: 16px;">${match}</ul>`);
+    `<ul style="margin: 24px 0; padding-left: 24px; list-style-type: disc; font-size: 16px; text-align: left; line-height: 1.8;">${match}</ul>`);
   
-  // Convert paragraphs with proper spacing
+  // Convert paragraphs with proper spacing and alignment
   formatted = formatted.replace(/^([^<\n-].+)$/gm, (match) => {
     if (match.trim() && !match.includes('<')) {
-      return `<p style="margin: 16px 0; line-height: 1.7; color: #2d3748; text-align: left;">${match.trim()}</p>`;
+      return `<p style="margin: 18px 0; line-height: 1.8; color: #2d3748; text-align: left; font-size: 16px; word-wrap: break-word; max-width: 100%;">${match.trim()}</p>`;
     }
     return match;
   });
@@ -206,7 +206,12 @@ export const addProfessionalFormatting = (content, options = {}) => {
       `<li style="margin: 8px 0; padding: 8px 12px; background: #f0fff4; border-left: 4px solid #38a169; border-radius: 4px;"><span style="font-weight: 500; color: #2d3748;">✓ ${obj.replace(/^[-•*]\s*/, '').trim()}</span></li>`
     ).join('');
     
-    return `<div style="margin: 24px 0; padding: 20px; background: linear-gradient(135deg, #f0fff4 0%, #c6f6d5 100%); border-radius: 12px; border: 1px solid #9ae6b4;"><h3 style="font-size: 1.2em; font-weight: 600; color: #22543d; margin: 0 0 16px 0; display: flex; align-items: center; gap: 8px;">🎯 Learning Outcomes</h3><ul style="list-style: none; margin: 0; padding: 0;">${objectivesList}</ul></div>`;
+    return `<h3 style="font-size: 1.4em; font-weight: 700; color: #2d3748; margin: 32px 0 16px 0; padding: 12px 0; border-bottom: 3px solid #38a169;">📚 Learning Objectives</h3>
+<div style="margin: 16px 0;">
+${objectivesList ? `<ul style="list-style: none; padding: 0; margin: 0;">
+${objectivesList}
+</ul>` : ''}
+</div>`;
   });
   
   // 3. STEP-BY-STEP INSTRUCTIONS - Now works with normalized ## Step sections

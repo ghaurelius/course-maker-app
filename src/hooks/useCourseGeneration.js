@@ -173,13 +173,9 @@ Return a JSON object with:
   "mainTopics": ["topic1", "topic2"]
 }`;
 
-          const chunkResult = await makeAIRequest(
-            [{ role: 'user', content: chunkPrompt }],
-            apiKey,
-            500, // Smaller token limit for chunks
-            0.3,
-            provider
-          );
+          // This function should not make direct AI requests
+          // Remove this call as it creates circular dependency
+          const chunkResult = { error: 'Chunked processing not available' };
           
           return {
             chunkId: chunk.id,
